@@ -1,6 +1,6 @@
 import pytest
 from pyproj import Geod, Transformer
-from shapely import transform
+from shapely import segmentize, transform
 from shapely.geometry import GeometryCollection, LineString, MultiLineString, MultiPolygon, Point, Polygon, box
 
 from app.measure import measure
@@ -138,3 +138,17 @@ def test_two_point_line_across_a_continent():
 def test_multiline_with_parts_far_apart():
     parts = MultiLineString([[(0, 0), (0.01, 0)], [(60, 60), (60.01, 60)]])
     assert measure(parts, "EPSG:4326").value == pytest.approx(GEOD.geometry_length(parts), rel=1e-6)
+
+
+def test_big_polygon_with_few_points_uses_geodesic_edges():
+    for corner_lat in (0, 45, 60):
+        square = box(10, corner_lat, 20, corner_lat + 10)
+        assert measure(square, "EPSG:4326").value == pytest.approx(geodesic_area(square), rel=1e-6)
+
+
+def test_projected_file_edges_stay_straight_in_the_file_crs():
+    sparse = box(200_000, 1_800_000, 800_000, 2_400_000)
+    dense = segmentize(sparse, 100)
+    assert measure(sparse, "EPSG:32644").value == pytest.approx(measure(dense, "EPSG:32644").value, rel=1e-6)
+    road = LineString([(200_000, 1_800_000), (800_000, 2_400_000)])
+    assert measure(road, "EPSG:32644").value == pytest.approx(measure(segmentize(road, 100), "EPSG:32644").value, rel=1e-6)

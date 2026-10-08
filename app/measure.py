@@ -6,11 +6,14 @@ import shapely
 from pyproj import CRS, Transformer
 from shapely.geometry.base import BaseGeometry
 
+from app.edges import geodesic_edges, metres_per_unit, straight_edges
+
 WGS84 = "EPSG:4326"
 AREA_TYPES = {"Polygon", "MultiPolygon"}
 LENGTH_TYPES = {"LineString", "MultiLineString"}
 POINT_TYPES = {"Point", "MultiPoint"}
 SECTION_RADIUS = 50_000
+SHORT_EDGE_DEGREES = 0.05
 AREA_UNITS = {"square_metre": 1.0, "hectare": 10_000.0, "square_kilometre": 1_000_000.0, "acre": 4046.8564224}
 LENGTH_UNITS = {"metre": 1.0, "kilometre": 1000.0, "mile": 1609.344, "foot": 0.3048}
 
@@ -42,10 +45,16 @@ def measure(geometry: BaseGeometry | None, source_crs: str | None) -> Measuremen
 
 
 def calculate(geometry: BaseGeometry, is_area: bool, source_crs: str) -> Measurement:
+    unit = metres_per_unit(source_crs)
+    if unit:
+        geometry = straight_edges(geometry, unit)
     lonlat = reproject(geometry, source_crs, WGS84)
     lons, lats = shapely.get_coordinates(lonlat).T
     if not (np.isfinite(lons).all() and (np.abs(lats) <= 90).all()):
         return Measurement(note="coordinates are outside the valid range of the file crs")
+    if unit is None and max(np.ptp(lons), np.ptp(lats)) > SHORT_EDGE_DEGREES:
+        lonlat = geodesic_edges(lonlat)
+        lons, lats = shapely.get_coordinates(lonlat).T
     target = local_projection(lons, lats, is_area)
     if not is_area:
         lines = [line_length(shapely.get_coordinates(line)) for line in getattr(lonlat, "geoms", [lonlat])]
