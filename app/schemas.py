@@ -1,6 +1,12 @@
 from datetime import datetime
+from enum import Enum
 
 from pydantic import BaseModel, ConfigDict
+
+from app.measure import AREA_UNITS, LENGTH_UNITS
+
+AreaUnit = Enum("AreaUnit", {name: name for name in AREA_UNITS}, type=str)
+LengthUnit = Enum("LengthUnit", {name: name for name in LENGTH_UNITS}, type=str)
 
 
 class FileOut(BaseModel):

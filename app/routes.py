@@ -4,8 +4,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_session
+from app.measure import convert
 from app.models import Feature, UploadedFile
-from app.schemas import FeaturePage, FileOut, FilePage, MeasurementPage
+from app.schemas import AreaUnit, FeaturePage, FileOut, FilePage, LengthUnit, MeasurementOut, MeasurementPage
 from app.services import RejectedUpload, handle_upload
 
 router = APIRouter(prefix="/api/files", tags=["files"])
@@ -78,9 +79,15 @@ def file_measurements(
     session: Session = Depends(get_session),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    area_unit: AreaUnit = AreaUnit.square_metre,
+    length_unit: LengthUnit = LengthUnit.metre,
 ):
-    features = feature_page(session, record.id, limit, offset)
+    measurements = []
+    for feature in feature_page(session, record.id, limit, offset):
+        item = MeasurementOut.model_validate(feature)
+        item.value, item.unit = convert(item.measurement_type, item.value, area_unit.value, length_unit.value)
+        measurements.append(item)
     return MeasurementPage(
         file_id=record.id, total=record.feature_count,
-        limit=limit, offset=offset, measurements=features,
+        limit=limit, offset=offset, measurements=measurements,
     )

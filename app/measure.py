@@ -9,6 +9,8 @@ WGS84 = "EPSG:4326"
 AREA_TYPES = {"Polygon", "MultiPolygon"}
 LENGTH_TYPES = {"LineString", "MultiLineString"}
 POINT_TYPES = {"Point", "MultiPoint"}
+AREA_UNITS = {"square_metre": 1.0, "hectare": 10_000.0, "square_kilometre": 1_000_000.0, "acre": 4046.8564224}
+LENGTH_UNITS = {"metre": 1.0, "kilometre": 1000.0, "mile": 1609.344, "foot": 0.3048}
 
 
 @dataclass
@@ -43,6 +45,14 @@ def measure(geometry: BaseGeometry | None, source_crs: str | None) -> Measuremen
     if is_area:
         return Measurement("area", projected.area, "square_metre", target, note)
     return Measurement("length", projected.length, "metre", target, note)
+
+
+def convert(measurement_type: str | None, value: float | None, area_unit: str, length_unit: str):
+    if value is None:
+        return None, None
+    if measurement_type == "area":
+        return value / AREA_UNITS[area_unit], area_unit
+    return value / LENGTH_UNITS[length_unit], length_unit
 
 
 def local_projection(lonlat: BaseGeometry, is_area: bool) -> str:

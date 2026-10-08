@@ -1,3 +1,4 @@
+import pytest
 from shapely.geometry import box
 
 from app import services
@@ -28,6 +29,20 @@ def test_kml_measurements(client, kml_bytes):
     assert by_type["LineString"]["measurement_type"] == "length"
     assert 1_530 < by_type["LineString"]["value"] < 1_540
     assert by_type["Point"]["value"] is None
+
+
+def test_measurements_in_other_units(client, kml_bytes):
+    file_id = upload(client, "survey.kml", kml_bytes).json()["id"]
+    url = f"/api/files/{file_id}/measurements/"
+    metric = {m["geometry_type"]: m for m in client.get(url).json()["measurements"]}
+    params = {"area_unit": "hectare", "length_unit": "kilometre"}
+    other = {m["geometry_type"]: m for m in client.get(url, params=params).json()["measurements"]}
+    assert other["Polygon"]["unit"] == "hectare"
+    assert other["Polygon"]["value"] == pytest.approx(metric["Polygon"]["value"] / 10_000)
+    assert other["LineString"]["unit"] == "kilometre"
+    assert other["LineString"]["value"] == pytest.approx(metric["LineString"]["value"] / 1000)
+    assert other["Point"]["unit"] is None
+    assert client.get(url, params={"area_unit": "furlong"}).status_code == 422
 
 
 def test_kmz_gives_same_features_as_kml(client, kml_bytes, kmz_bytes):
