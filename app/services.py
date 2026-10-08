@@ -60,7 +60,7 @@ def process(record: UploadedFile, path: Path):
     record.crs, record.crs_assumed = detect_crs(frame)
     source_crs = frame.crs.to_wkt() if frame.crs else (WGS84 if record.crs_assumed else None)
     attributes = pd.DataFrame(frame.drop(columns=frame.geometry.name))
-    properties = json.loads(attributes.to_json(orient="records", date_format="iso"))
+    properties = json.loads(attributes.to_json(orient="records", date_format="iso")) or [{}] * len(frame)
     for index, geometry in enumerate(frame.geometry):
         result = measure(geometry, source_crs)
         record.features.append(

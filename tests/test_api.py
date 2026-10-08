@@ -93,6 +93,14 @@ def test_geojson_upload_is_measured(client, geojson_bytes):
     assert 1_170_000 < measurement["value"] < 1_180_000
 
 
+def test_geojson_without_properties(client):
+    content = b'{"type": "Polygon", "coordinates": [[[78.47, 17.38], [78.48, 17.38], [78.48, 17.39], [78.47, 17.38]]]}'
+    body = upload(client, "bare.geojson", content).json()
+    assert body["status"] == "COMPLETED"
+    feature = client.get(f"/api/files/{body['id']}/features/").json()["features"][0]
+    assert feature["properties"] == {}
+
+
 def test_shapefile_zip_features_and_pagination(client, make_shapefile_zip):
     content = make_shapefile_zip([PLOT, box(78.50, 17.38, 78.51, 17.39)])
     file_id = upload(client, "plots.zip", content).json()["id"]
