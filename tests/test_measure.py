@@ -1,7 +1,7 @@
 import pytest
 from pyproj import Geod, Transformer
 from shapely import transform
-from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Point, Polygon, box
+from shapely.geometry import GeometryCollection, LineString, MultiLineString, MultiPolygon, Point, Polygon, box
 
 from app.measure import measure
 
@@ -120,3 +120,21 @@ def test_bad_coordinates_are_reported_not_raised():
 def test_degenerate_shapes_measure_as_zero():
     assert measure(LineString([(78.47, 17.38), (78.47, 17.38)]), "EPSG:4326").value == 0
     assert measure(Polygon([(78.47, 17.38), (78.48, 17.38), (78.47, 17.38)]), "EPSG:4326").value == 0
+
+
+def test_long_line_matches_geodesic_length():
+    coast = LineString([(70 + i * 0.05, 8 + i * 0.04 + (i % 3) * 0.1) for i in range(800)])
+    result = measure(coast, "EPSG:4326")
+    assert GEOD.geometry_length(coast) > 5_000_000
+    assert result.value == pytest.approx(GEOD.geometry_length(coast), rel=1e-5)
+    assert "sections" in result.note
+
+
+def test_two_point_line_across_a_continent():
+    flight = LineString([(0, 60), (60, 60)])
+    assert measure(flight, "EPSG:4326").value == pytest.approx(GEOD.geometry_length(flight), rel=1e-9)
+
+
+def test_multiline_with_parts_far_apart():
+    parts = MultiLineString([[(0, 0), (0.01, 0)], [(60, 60), (60.01, 60)]])
+    assert measure(parts, "EPSG:4326").value == pytest.approx(GEOD.geometry_length(parts), rel=1e-6)

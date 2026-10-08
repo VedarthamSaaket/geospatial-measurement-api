@@ -10,6 +10,7 @@ WGS84 = "EPSG:4326"
 AREA_TYPES = {"Polygon", "MultiPolygon"}
 LENGTH_TYPES = {"LineString", "MultiLineString"}
 POINT_TYPES = {"Point", "MultiPoint"}
+SECTION_RADIUS = 50_000
 AREA_UNITS = {"square_metre": 1.0, "hectare": 10_000.0, "square_kilometre": 1_000_000.0, "acre": 4046.8564224}
 LENGTH_UNITS = {"metre": 1.0, "kilometre": 1000.0, "mile": 1609.344, "foot": 0.3048}
 
@@ -46,14 +47,28 @@ def calculate(geometry: BaseGeometry, is_area: bool, source_crs: str) -> Measure
     if not (np.isfinite(lons).all() and (np.abs(lats) <= 90).all()):
         return Measurement(note="coordinates are outside the valid range of the file crs")
     target = local_projection(lons, lats, is_area)
+    if not is_area:
+        lines = [line_length(shapely.get_coordinates(line)) for line in getattr(lonlat, "geoms", [lonlat])]
+        sections = sum(count for _, count in lines)
+        note = "line was measured in sections, each in its own projection" if sections > 1 else None
+        return Measurement("length", sum(length for length, _ in lines), "metre", target, note)
     projected = reproject(lonlat, WGS84, target)
     note = None
-    if is_area and not projected.is_valid:
+    if not projected.is_valid:
         projected = keep_polygons(shapely.make_valid(projected))
         note = "geometry was invalid and was repaired before measuring"
-    if is_area:
-        return Measurement("area", projected.area, "square_metre", target, note)
-    return Measurement("length", projected.length, "metre", target, None)
+    return Measurement("area", projected.area, "square_metre", target, note)
+
+
+def line_length(coords: np.ndarray) -> tuple[float, int]:
+    centre = coords[:1] if len(coords) == 2 else coords
+    target = local_projection(centre[:, 0], centre[:, 1], False)
+    xs, ys = transformer(WGS84, target).transform(coords[:, 0], coords[:, 1])
+    if len(coords) > 2 and np.hypot(xs, ys).max() > SECTION_RADIUS:
+        middle = len(coords) // 2
+        first, second = line_length(coords[: middle + 1]), line_length(coords[middle:])
+        return first[0] + second[0], first[1] + second[1]
+    return float(np.hypot(np.diff(xs), np.diff(ys)).sum()), 1
 
 
 def convert(measurement_type: str | None, value: float | None, area_unit: str, length_unit: str):
