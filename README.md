@@ -18,11 +18,13 @@ app/routes.py has the api endpoints.
 app/services.py handles an upload from start to finish, it saves the file, reads it, measures every feature and stores the result, and it also works out the totals for the summary.
 app/readers.py reads a kml, kmz, geojson or zipped shapefile into a geodataframe and figures out the crs.
 app/measure.py has the measurement logic, it picks a projection for each feature and calculates area or length, and it converts units.
+app/edges.py adds points along long edges before measuring, so the result does not depend on how many points a shape has.
 tests/conftest.py has the test client and helpers that build sample kml and shapefile zips.
 tests/test_measure.py tests the measurement logic directly.
 tests/test_api.py tests the endpoints with real uploads.
+tests/test_units.py tests the small internal functions one by one against values worked out by hand.
 requirements.txt lists the python packages.
-Dockerfile runs the app in a container if you dont want to set up python.
+Dockerfile builds an image that runs the app the same way on any machine.
 
 
 setup
@@ -41,6 +43,7 @@ uvicorn app.main:app --reload
 the api runs on http://localhost:8000 and the interactive docs are on http://localhost:8000/docs.
 a data folder is created on first run and it holds the sqlite database.
 you can change the location with the DATA_DIR env variable, and the upload limit with MAX_UPLOAD_MB, the default is 50.
+CORS_ORIGINS is the list of web origins that can call the api from a browser, separated by commas, and the default is * which means any.
 
 to run the tests
 
@@ -52,7 +55,7 @@ to run it with docker instead
 
 ```
 docker build -t geo-api .
-docker run -p 8000:8000 geo-api
+docker run -p 8000:8000 -v geo-data:/srv/data geo-api
 ```
 
 
@@ -86,6 +89,7 @@ curl -X POST http://localhost:8000/api/files/ -F "file=@survey.kml"
 
 it returns 201 when the file was processed.
 it returns 415 if the extension is not one of those, 400 if the file is empty and 413 if it is bigger than the limit.
+it returns 400 if more than one file is sent in the same upload, and nothing is stored.
 it returns 422 if the file has the right extension but cant be read, and the body has status FAILED with the reason.
 
 ```
@@ -262,6 +266,10 @@ a feature with no geometry gets no measurement and a note saying so.
 points and multipoints get no measurement.
 any other type that is not a polygon or a line, like a geometry collection, gets no measurement and a note, it does not crash the upload.
 the z value is dropped because area and length are measured on the ground.
+before measuring, extra points are added along every edge longer than 10 km.
+if the file crs is in lon lat the points follow the geodesic, the shortest path on the earth between the two ends.
+if the file crs is projected the points follow the straight line in that crs.
+edges shorter than 10 km are left alone, so normal files are measured exactly like before.
 the geometry is converted to lon lat first.
 if a coordinate is not a number or the latitude is outside -90 to 90, the feature gets no measurement and a note, the rest of the file is still measured.
 a polygon is then converted to a projection made for that feature and shapely calculates the area.
@@ -386,21 +394,52 @@ moving the longitudes to 0 to 360 before taking the centre fixed both, and they 
 i did not split the geometry at the line, because the projection does not care about the line once its centre is right.
 
 docker
-docker is not needed to run this, because the gdal library comes inside the pyogrio wheel.
-i still added a small Dockerfile for anyone who does not want to install python.
+the app can run without docker, because the gdal library comes inside the pyogrio wheel.
+the Dockerfile is there because the numbers depend on the gdal and proj versions, and the image pins them together with python, so every machine measures with the same libraries.
+i built the image and ran the same upload tests against the container, and every measurement matched running it directly to at least 11 digits.
+the container runs as a normal user and not root.
+the database is in a volume, so the files are still there after the container is restarted or replaced.
+it has a health check that calls /health.
+the image is about 710 MB, most of it is the geospatial libraries.
+i used the slim python image and not alpine, because the pyogrio and shapely wheels are built for glibc and alpine would have to compile gdal.
+
+what an edge between two points means
+a file only stores the corner points, it does not say what the line between them looks like, and for a big shape that changes the area.
+i looked at how other projects handle it.
+postgis has two types, geometry treats an edge as a straight line in the coordinates, and geography treats it as the shortest path on the earth.
+qgis measures on the ellipsoid when one is set for the project, and pyproj has geodesic area and length built in.
+the geojson spec says an edge is a straight line in lon lat and warns that it can be far from the geodesic.
+i went with the geodesic for files in lon lat, because that is what postgis geography, qgis and pyproj give, so the numbers can be checked against them.
+for files in a projected crs i kept the straight line in that crs, because that is what the file means and what postgis geometry does.
+before this a square with only 4 points was 0.004 percent off at 1 degree wide and 0.4 percent off at 10 degrees.
+now it is within 0.00004 percent of the geodesic area at every size i tested, up to 120 degrees wide.
+the points are only added for measuring, the stored geometry is not changed.
+there is a cap of 10000 points on one ring, so a bad file cant make the server build millions of points.
+
+one file per upload
+the upload takes one file, like the assignment says.
+if two files came in the same request the second one used to replace the first without any message.
+now it is a 400 with a clear message, which is better than quietly dropping a file.
+i did not make it process many files at once, because the response is one file record and that would change the api.
+
+cors
+a browser blocks a web page from calling an api on another address unless the api allows it.
+a map page that uploads files to this service would hit that, so the api sends the cors headers.
+it allows any origin by default because there is no login and no cookies, and CORS_ORIGINS can limit it to a list.
 
 tests
 the assignment does not ask for tests.
 i added them because the measurement numbers are easy to get wrong without noticing, so the tests compare them with geodesic values from pyproj.
+there are 56 tests and they run every line and every branch of the app code.
+some check the result from outside through the api, and some call one function and compare it with a value worked out by hand.
+for example one degree along the equator has to be 6378137 times pi divided by 180 metres, and a 100 m square at the centre of a utm zone has to be 10000 divided by 0.9996 squared square metres.
 
 
 known limits
 
-a feature that is really more than 180 degrees wide and does not cross the 180 degree line is treated as if it crosses it.
-for very large polygons the edges between points are treated as straight lines in the projection, so the result depends on how many points the shape has.
-compared with geodesic edges, a square with only 4 points was 0.004 percent off at 1 degree wide, 0.1 percent at 5 degrees and 0.4 percent at 10 degrees.
-a 1000 km wide shape with 72 points was within 0.001 percent, so this only matters for huge shapes with very few points.
-if two files are sent in the same upload only the last one is processed.
+in a lon lat file an edge always takes the shortest way round the earth, so one edge cant be longer than half way round.
+a geojson file is measured with geodesic edges like every other lon lat file, even though the geojson spec says straight lines in lon lat, the two only differ for edges that are many km long.
+a shape that covers more than half of the earth is not measured correctly.
 a zip with more than one shapefile is rejected.
 a kmz with more than one kml inside only has doc.kml read, or the first kml if there is no doc.kml.
 geojson is only accepted with the .geojson extension, not .json.
@@ -418,6 +457,8 @@ a shape can be valid on the earth and invalid in lon lat, so validity has to be 
 error text from a library can carry server paths, so it has to be cleaned before it is shown to a client.
 testing with odd files found more bugs than testing with good ones, like a geojson with no properties and a line with two identical points.
 sqlite does not keep the timezone of a datetime, so the time has to be marked as utc again when it is read back.
+the same corner points can mean different shapes, and postgis, qgis and the geojson spec do not all agree on which one.
+building the docker image and testing inside it is the only way to know the Dockerfile works, reading it is not enough.
 keeping the measurement code separate from fastapi made it much easier to test.
 
 
@@ -425,7 +466,8 @@ future scope
 
 background processing with a job queue for very large files, with the client polling the status.
 support for geopackage and other formats.
-splitting long edges into smaller pieces before projecting, for better accuracy on very large features.
+an option to choose between geodesic and straight edges for lon lat files.
+uploading several files in one request and getting a list back.
 postgres with postgis if spatial queries are needed, like finding features inside a bounding box.
 authentication and per user files.
 automatic cleanup of old files.
