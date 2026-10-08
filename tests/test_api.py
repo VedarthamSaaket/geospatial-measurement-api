@@ -173,6 +173,14 @@ def test_rejected_uploads(client, monkeypatch):
     assert upload(client, "big.kml", b"x" * 11).status_code == 413
 
 
+def test_two_files_in_one_upload_are_rejected(client, kml_bytes, geojson_bytes):
+    files = [("file", ("survey.kml", kml_bytes)), ("file", ("plot.geojson", geojson_bytes))]
+    response = client.post("/api/files/", files=files)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "send one file per upload"
+    assert client.get("/api/files/").json()["total"] == 0
+
+
 def test_unknown_file_id_is_404(client):
     assert client.get("/api/files/missing/").status_code == 404
     assert client.get("/api/files/missing/measurements/").status_code == 404

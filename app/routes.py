@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -26,7 +26,13 @@ def feature_page(session: Session, file_id: str, limit: int, offset: int) -> lis
     return list(session.scalars(query.limit(limit).offset(offset)))
 
 
-@router.post("/", response_model=FileOut, status_code=201)
+async def one_file_only(request: Request):
+    form = await request.form()
+    if len(form.getlist("file")) > 1:
+        raise HTTPException(400, "send one file per upload")
+
+
+@router.post("/", response_model=FileOut, status_code=201, dependencies=[Depends(one_file_only)])
 def upload_file(file: UploadFile, session: Session = Depends(get_session)):
     try:
         record = handle_upload(session, file.filename or "", file.file)
