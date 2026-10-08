@@ -51,6 +51,20 @@ def kml_bytes():
 
 
 @pytest.fixture
+def kmz_bytes():
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("doc.kml", KML)
+    return buffer.getvalue()
+
+
+@pytest.fixture
+def geojson_bytes():
+    plot = gpd.GeoDataFrame({"name": ["plot a"]}, geometry=[box(78.47, 17.38, 78.48, 17.39)], crs="EPSG:4326")
+    return plot.to_json().encode()
+
+
+@pytest.fixture
 def make_shapefile_zip(tmp_path):
     def build(geometries, crs="EPSG:4326", skip=()):
         folder = tmp_path / f"shp{len(list(tmp_path.iterdir()))}"

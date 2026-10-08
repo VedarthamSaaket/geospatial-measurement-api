@@ -30,6 +30,30 @@ def test_kml_measurements(client, kml_bytes):
     assert by_type["Point"]["value"] is None
 
 
+def test_kmz_gives_same_features_as_kml(client, kml_bytes, kmz_bytes):
+    from_kml = upload(client, "survey.kml", kml_bytes).json()
+    from_kmz = upload(client, "survey.kmz", kmz_bytes).json()
+    assert from_kmz["file_type"] == "kmz"
+    assert from_kmz["feature_count"] == from_kml["feature_count"]
+    kml_values = client.get(f"/api/files/{from_kml['id']}/measurements/").json()["measurements"]
+    kmz_values = client.get(f"/api/files/{from_kmz['id']}/measurements/").json()["measurements"]
+    assert [m["value"] for m in kmz_values] == [m["value"] for m in kml_values]
+
+
+def test_kmz_without_kml_is_failed(client, make_shapefile_zip):
+    response = upload(client, "wrong.kmz", make_shapefile_zip([PLOT]))
+    assert response.status_code == 422
+    assert "no kml" in response.json()["error"]
+
+
+def test_geojson_upload_is_measured(client, geojson_bytes):
+    body = upload(client, "plot.geojson", geojson_bytes).json()
+    assert body["status"] == "COMPLETED"
+    assert body["crs"] == "EPSG:4326"
+    measurement = client.get(f"/api/files/{body['id']}/measurements/").json()["measurements"][0]
+    assert 1_170_000 < measurement["value"] < 1_180_000
+
+
 def test_shapefile_zip_features_and_pagination(client, make_shapefile_zip):
     content = make_shapefile_zip([PLOT, box(78.50, 17.38, 78.51, 17.39)])
     file_id = upload(client, "plots.zip", content).json()["id"]
@@ -76,6 +100,8 @@ def test_zip_missing_parts_is_failed(client, make_shapefile_zip):
 def test_corrupt_files_do_not_crash(client):
     assert upload(client, "fake.zip", b"not a zip").status_code == 422
     assert upload(client, "fake.kml", b"not xml").status_code == 422
+    assert upload(client, "fake.kmz", b"not a zip").status_code == 422
+    assert upload(client, "fake.geojson", b"not json").status_code == 422
 
 
 def test_rejected_uploads(client, monkeypatch):

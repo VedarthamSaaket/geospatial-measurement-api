@@ -14,20 +14,18 @@ class UnreadableFile(Exception):
 
 def read_geofile(path: Path) -> gpd.GeoDataFrame:
     try:
-        if path.suffix.lower() == ".kml":
-            return read_kml(path)
-        return read_shapefile_zip(path)
+        return READERS[path.suffix.lower()](path)
     except UnreadableFile:
         raise
     except Exception as exc:
         raise UnreadableFile(f"could not read file: {exc}") from exc
 
 
-def read_kml(path: Path) -> gpd.GeoDataFrame:
-    layers = [name for name, _ in pyogrio.list_layers(path)]
+def read_kml(source: Path | str) -> gpd.GeoDataFrame:
+    layers = [name for name, _ in pyogrio.list_layers(source)]
     if not layers:
         raise UnreadableFile("kml has no layers")
-    frames = [gpd.read_file(path, layer=name, engine="pyogrio") for name in layers]
+    frames = [gpd.read_file(source, layer=name, engine="pyogrio") for name in layers]
     frames = [frame for frame in frames if len(frame)]
     if not frames:
         return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
@@ -36,16 +34,31 @@ def read_kml(path: Path) -> gpd.GeoDataFrame:
     return merged.drop(columns=empty_columns)
 
 
+def read_kmz(path: Path) -> gpd.GeoDataFrame:
+    documents = [n for n in archive_names(path) if n.lower().endswith(".kml")]
+    if not documents:
+        raise UnreadableFile("kmz has no kml file inside")
+    member = "doc.kml" if "doc.kml" in documents else documents[0]
+    return read_kml(f"/vsizip/{path.resolve()}/{member}")
+
+
+def read_geojson(path: Path) -> gpd.GeoDataFrame:
+    return gpd.read_file(path, engine="pyogrio")
+
+
 def read_shapefile_zip(path: Path) -> gpd.GeoDataFrame:
-    if not zipfile.is_zipfile(path):
-        raise UnreadableFile("file is not a valid zip archive")
-    member = find_shapefile(path)
+    member = find_shapefile(archive_names(path))
     return gpd.read_file(f"/vsizip/{path.resolve()}/{member}", engine="pyogrio")
 
 
-def find_shapefile(path: Path) -> str:
+def archive_names(path: Path) -> list[str]:
+    if not zipfile.is_zipfile(path):
+        raise UnreadableFile("file is not a valid zip archive")
     with zipfile.ZipFile(path) as archive:
-        names = [n for n in archive.namelist() if not n.startswith("__MACOSX/")]
+        return [n for n in archive.namelist() if not n.startswith("__MACOSX/")]
+
+
+def find_shapefile(names: list[str]) -> str:
     shapefiles = [n for n in names if n.lower().endswith(".shp")]
     if len(shapefiles) != 1:
         raise UnreadableFile(f"zip must contain exactly one .shp file, found {len(shapefiles)}")
@@ -56,6 +69,9 @@ def find_shapefile(path: Path) -> str:
     if missing:
         raise UnreadableFile(f"zip is missing shapefile parts: {', '.join(missing)}")
     return member
+
+
+READERS = {".kml": read_kml, ".kmz": read_kmz, ".geojson": read_geojson, ".zip": read_shapefile_zip}
 
 
 def detect_crs(frame: gpd.GeoDataFrame) -> tuple[str | None, bool]:
