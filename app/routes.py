@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.models import Feature, UploadedFile
-from app.schemas import FeaturePage, FileOut, MeasurementPage
+from app.schemas import FeaturePage, FileOut, FilePage, MeasurementPage
 from app.services import RejectedUpload, handle_upload
 
 router = APIRouter(prefix="/api/files", tags=["files"])
@@ -35,9 +35,27 @@ def upload_file(file: UploadFile, session: Session = Depends(get_session)):
     return record
 
 
+@router.get("/", response_model=FilePage)
+def list_files(
+    session: Session = Depends(get_session),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    total = session.scalar(select(func.count()).select_from(UploadedFile))
+    query = select(UploadedFile).order_by(UploadedFile.created_at.desc(), UploadedFile.id)
+    files = list(session.scalars(query.limit(limit).offset(offset)))
+    return FilePage(total=total, limit=limit, offset=offset, files=files)
+
+
 @router.get("/{file_id}/", response_model=FileOut)
 def file_info(record: UploadedFile = Depends(get_file)):
     return record
+
+
+@router.delete("/{file_id}/", status_code=204)
+def delete_file(record: UploadedFile = Depends(get_file), session: Session = Depends(get_session)):
+    session.delete(record)
+    session.commit()
 
 
 @router.get("/{file_id}/features/", response_model=FeaturePage)

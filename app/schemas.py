@@ -17,6 +17,13 @@ class FileOut(BaseModel):
     created_at: datetime
 
 
+class FilePage(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    files: list[FileOut]
+
+
 class FeatureOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -114,3 +114,21 @@ def test_rejected_uploads(client, monkeypatch):
 def test_unknown_file_id_is_404(client):
     assert client.get("/api/files/missing/").status_code == 404
     assert client.get("/api/files/missing/measurements/").status_code == 404
+
+
+def test_list_files_newest_first(client, kml_bytes, geojson_bytes):
+    first = upload(client, "survey.kml", kml_bytes).json()["id"]
+    second = upload(client, "plot.geojson", geojson_bytes).json()["id"]
+    body = client.get("/api/files/").json()
+    assert body["total"] == 2
+    assert [f["id"] for f in body["files"]] == [second, first]
+    assert len(client.get("/api/files/", params={"limit": 1}).json()["files"]) == 1
+
+
+def test_delete_file(client, kml_bytes):
+    file_id = upload(client, "survey.kml", kml_bytes).json()["id"]
+    assert client.delete(f"/api/files/{file_id}/").status_code == 204
+    assert client.get(f"/api/files/{file_id}/").status_code == 404
+    assert client.get(f"/api/files/{file_id}/measurements/").status_code == 404
+    assert client.get("/api/files/").json()["total"] == 0
+    assert client.delete(f"/api/files/{file_id}/").status_code == 404
