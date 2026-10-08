@@ -26,7 +26,7 @@ def handle_upload(session: Session, filename: str, stream: BinaryIO) -> Uploaded
     extension = Path(filename).suffix.lower()
     if extension not in ALLOWED_EXTENSIONS:
         raise RejectedUpload(415, "accepted files are .kml, .kmz, .geojson or a .zip containing a shapefile")
-    record = UploadedFile(id=new_id(), filename=Path(filename).name, file_type=extension.lstrip("."))
+    record = UploadedFile(id=new_id(), filename=Path(filename).name[:255], file_type=extension.lstrip("."))
     path = UPLOAD_DIR / f"{record.id}{extension}"
     try:
         save_stream(stream, path)

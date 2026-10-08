@@ -82,7 +82,7 @@ READERS = {".kml": read_kml, ".kmz": read_kmz, ".geojson": read_geojson, ".zip":
 def detect_crs(frame: gpd.GeoDataFrame) -> tuple[str | None, bool]:
     if frame.crs is not None:
         epsg = frame.crs.to_epsg()
-        return (f"EPSG:{epsg}" if epsg else frame.crs.name), False
+        return (f"EPSG:{epsg}" if epsg else frame.crs.name[:64]), False
     if len(frame) and looks_like_lonlat(frame):
         return "EPSG:4326", True
     return None, False
