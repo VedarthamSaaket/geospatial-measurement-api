@@ -56,9 +56,12 @@ def convert(measurement_type: str | None, value: float | None, area_unit: str, l
 
 
 def local_projection(lonlat: BaseGeometry, is_area: bool) -> str:
-    minx, miny, maxx, maxy = lonlat.bounds
-    lon = round((minx + maxx) / 2, 6)
-    lat = round((miny + maxy) / 2, 6)
+    lons, lats = shapely.get_coordinates(lonlat).T
+    if lons.max() - lons.min() > 180:
+        lons = lons % 360
+    lon = round((lons.min() + lons.max()) / 2, 6)
+    lon = lon - 360 if lon > 180 else lon
+    lat = round((lats.min() + lats.max()) / 2, 6)
     projection = "laea" if is_area else "aeqd"
     return f"+proj={projection} +lat_0={lat} +lon_0={lon} +datum=WGS84 +units=m"
 

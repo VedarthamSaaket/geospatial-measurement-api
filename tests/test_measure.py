@@ -73,3 +73,13 @@ def test_invalid_polygon_is_repaired():
     result = measure(bowtie, "EPSG:4326")
     assert result.value > 0
     assert "repaired" in result.note
+
+
+def test_feature_crossing_the_180_line_is_measured_like_any_other():
+    crossing = Polygon([(179.95, 10), (-179.95, 10), (-179.95, 10.1), (179.95, 10.1)])
+    same_shape_elsewhere = box(-0.05, 10, 0.05, 10.1)
+    expected = measure(same_shape_elsewhere, "EPSG:4326").value
+    assert measure(crossing, "EPSG:4326").value == pytest.approx(expected, rel=1e-6)
+    line = LineString([(179.95, 10), (-179.95, 10.1)])
+    expected = GEOD.geometry_length(LineString([(-0.05, 10), (0.05, 10.1)]))
+    assert measure(line, "EPSG:4326").value == pytest.approx(expected, rel=1e-6)
