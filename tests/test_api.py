@@ -193,3 +193,18 @@ def test_delete_file(client, kml_bytes):
     assert client.get(f"/api/files/{file_id}/measurements/").status_code == 404
     assert client.get("/api/files/").json()["total"] == 0
     assert client.delete(f"/api/files/{file_id}/").status_code == 404
+
+
+def test_paths_work_without_the_trailing_slash(client, kml_bytes):
+    created = client.post("/api/files", files={"file": ("survey.kml", kml_bytes)}, follow_redirects=False)
+    assert created.status_code == 201
+    file_id = created.json()["id"]
+    for path in (f"/api/files/{file_id}", f"/api/files/{file_id}/measurements", f"/api/files/{file_id}/features", "/api/files"):
+        assert client.get(path, follow_redirects=False).status_code == 200
+    assert client.get(f"/api/files/{file_id}/measurements?limit=1", follow_redirects=False).json()["limit"] == 1
+
+
+def test_root_redirects_to_docs(client):
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/docs"
