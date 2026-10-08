@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
+from app.config import CORS_ORIGINS
 from app.database import init_db
 from app.routes import router
 
@@ -14,6 +16,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Geospatial File Measurement API", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 app.include_router(router)
 
 

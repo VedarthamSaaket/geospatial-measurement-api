@@ -209,3 +209,11 @@ def test_root_redirects_to_docs(client):
     response = client.get("/", follow_redirects=False)
     assert response.status_code == 307
     assert response.headers["location"] == "/docs"
+
+
+def test_cors_headers_for_a_page_on_another_origin(client):
+    origin = {"Origin": "https://maps.example.com"}
+    assert client.get("/api/files/", headers=origin).headers["access-control-allow-origin"] == "*"
+    preflight = client.options("/api/files/", headers={**origin, "Access-Control-Request-Method": "POST"})
+    assert preflight.status_code == 200
+    assert "POST" in preflight.headers["access-control-allow-methods"]
