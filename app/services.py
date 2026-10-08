@@ -5,6 +5,7 @@ from typing import BinaryIO
 
 import pandas as pd
 import shapely
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import ALLOWED_EXTENSIONS, MAX_UPLOAD_BYTES, UPLOAD_DIR
@@ -73,3 +74,19 @@ def process(record: UploadedFile, path: Path):
         )
     record.feature_count = len(record.features)
     record.status = "COMPLETED"
+
+
+def summarise(session: Session, file_id: str) -> dict:
+    query = (
+        select(Feature.geometry_type, Feature.measurement_type, func.count(), func.sum(Feature.value))
+        .where(Feature.file_id == file_id)
+        .group_by(Feature.geometry_type, Feature.measurement_type)
+    )
+    summary = {"geometry_types": {}, "measured_count": 0, "area": 0.0, "length": 0.0}
+    for geometry_type, measurement_type, count, total in session.execute(query):
+        name = geometry_type or "no geometry"
+        summary["geometry_types"][name] = summary["geometry_types"].get(name, 0) + count
+        if measurement_type:
+            summary["measured_count"] += count
+            summary[measurement_type] += total
+    return summary

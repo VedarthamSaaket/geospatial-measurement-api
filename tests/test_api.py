@@ -45,6 +45,28 @@ def test_measurements_in_other_units(client, kml_bytes):
     assert client.get(url, params={"area_unit": "furlong"}).status_code == 422
 
 
+def test_summary_totals(client, make_shapefile_zip):
+    content = make_shapefile_zip([PLOT, box(78.50, 17.38, 78.51, 17.39)])
+    file_id = upload(client, "plots.zip", content).json()["id"]
+    values = [m["value"] for m in client.get(f"/api/files/{file_id}/measurements/").json()["measurements"]]
+    summary = client.get(f"/api/files/{file_id}/summary/").json()
+    assert summary["geometry_types"] == {"Polygon": 2}
+    assert summary["measured_count"] == 2
+    assert summary["total_area"] == pytest.approx(sum(values))
+    assert summary["total_length"] == 0
+    hectares = client.get(f"/api/files/{file_id}/summary/", params={"area_unit": "hectare"}).json()
+    assert hectares["total_area"] == pytest.approx(sum(values) / 10_000)
+
+
+def test_summary_counts_unmeasured_features(client, kml_bytes):
+    file_id = upload(client, "survey.kml", kml_bytes).json()["id"]
+    summary = client.get(f"/api/files/{file_id}/summary/").json()
+    assert summary["geometry_types"] == {"Polygon": 1, "LineString": 1, "Point": 1}
+    assert summary["feature_count"] == 3
+    assert summary["measured_count"] == 2
+    assert summary["total_length"] > 0
+
+
 def test_kmz_gives_same_features_as_kml(client, kml_bytes, kmz_bytes):
     from_kml = upload(client, "survey.kml", kml_bytes).json()
     from_kmz = upload(client, "survey.kmz", kmz_bytes).json()

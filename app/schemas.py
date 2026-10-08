@@ -66,3 +66,14 @@ class MeasurementPage(BaseModel):
     limit: int
     offset: int
     measurements: list[MeasurementOut]
+
+
+class SummaryOut(BaseModel):
+    file_id: str
+    feature_count: int
+    measured_count: int
+    geometry_types: dict[str, int]
+    total_area: float
+    area_unit: str
+    total_length: float
+    length_unit: str

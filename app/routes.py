@@ -6,8 +6,10 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.measure import convert
 from app.models import Feature, UploadedFile
-from app.schemas import AreaUnit, FeaturePage, FileOut, FilePage, LengthUnit, MeasurementOut, MeasurementPage
-from app.services import RejectedUpload, handle_upload
+from app.schemas import (
+    AreaUnit, FeaturePage, FileOut, FilePage, LengthUnit, MeasurementOut, MeasurementPage, SummaryOut,
+)
+from app.services import RejectedUpload, handle_upload, summarise
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -90,4 +92,21 @@ def file_measurements(
     return MeasurementPage(
         file_id=record.id, total=record.feature_count,
         limit=limit, offset=offset, measurements=measurements,
+    )
+
+
+@router.get("/{file_id}/summary/", response_model=SummaryOut)
+def file_summary(
+    record: UploadedFile = Depends(get_file),
+    session: Session = Depends(get_session),
+    area_unit: AreaUnit = AreaUnit.square_metre,
+    length_unit: LengthUnit = LengthUnit.metre,
+):
+    summary = summarise(session, record.id)
+    total_area, _ = convert("area", summary["area"], area_unit.value, length_unit.value)
+    total_length, _ = convert("length", summary["length"], area_unit.value, length_unit.value)
+    return SummaryOut(
+        file_id=record.id, feature_count=record.feature_count, measured_count=summary["measured_count"],
+        geometry_types=summary["geometry_types"], total_area=total_area, area_unit=area_unit.value,
+        total_length=total_length, length_unit=length_unit.value,
     )
