@@ -17,6 +17,8 @@ def test_upload_kml_and_read_file_info(client, kml_bytes):
     info = client.get(f"/api/files/{body['id']}/")
     assert info.status_code == 200
     assert info.json()["filename"] == "survey.kml"
+    assert info.json()["created_at"] == body["created_at"]
+    assert body["created_at"].endswith("Z")
 
 
 def test_kml_measurements(client, kml_bytes):

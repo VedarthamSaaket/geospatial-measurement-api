@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.measure import AREA_UNITS, LENGTH_UNITS
 
@@ -21,6 +21,11 @@ class FileOut(BaseModel):
     status: str
     error: str | None
     created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def as_utc(cls, value: datetime) -> datetime:
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 class FilePage(BaseModel):
