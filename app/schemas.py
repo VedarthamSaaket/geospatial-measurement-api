@@ -41,6 +41,7 @@ class FeatureOut(BaseModel):
     index: int
     geometry_type: str | None
     geometry: dict | None
+    crs: str | None
     properties: dict
 
 

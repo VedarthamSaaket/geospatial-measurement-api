@@ -49,3 +49,7 @@ class Feature(Base):
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     file: Mapped[UploadedFile] = relationship(back_populates="features")
+
+    @property
+    def crs(self) -> str | None:
+        return self.file.crs

@@ -110,6 +110,7 @@ def test_shapefile_zip_features_and_pagination(client, make_shapefile_zip):
     feature = page["features"][0]
     assert feature["index"] == 1
     assert feature["geometry"]["type"] == "Polygon"
+    assert feature["crs"] == "EPSG:4326"
     assert feature["properties"] == {"name": "f1"}
 
 
