@@ -144,6 +144,20 @@ def test_zip_missing_parts_is_failed(client, make_shapefile_zip):
     assert client.get(f"/api/files/{response.json()['id']}/").json()["status"] == "FAILED"
 
 
+def test_kml_without_placemarks_is_completed_with_no_features(client):
+    content = b'<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document></Document></kml>'
+    response = upload(client, "nothing.kml", content)
+    assert response.status_code == 201
+    assert response.json()["feature_count"] == 0
+
+
+def test_read_errors_do_not_show_server_paths(client, tmp_path):
+    for name, content in (("fake.kml", b"<html></html>"), ("fake.geojson", b"{}"), ("fake.kmz", b"nope")):
+        error = upload(client, name, content).json()["error"]
+        assert str(tmp_path) not in error
+        assert "/" not in error
+
+
 def test_corrupt_files_do_not_crash(client):
     assert upload(client, "fake.zip", b"not a zip").status_code == 422
     assert upload(client, "fake.kml", b"not xml").status_code == 422

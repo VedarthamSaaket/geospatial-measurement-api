@@ -18,13 +18,18 @@ def read_geofile(path: Path) -> gpd.GeoDataFrame:
     except UnreadableFile:
         raise
     except Exception as exc:
-        raise UnreadableFile(f"could not read file: {exc}") from exc
+        raise UnreadableFile(f"could not read file: {clean_message(exc, path)}") from exc
+
+
+def clean_message(exc: Exception, path: Path) -> str:
+    message = str(exc).split(";")[0].replace("/vsizip/", "")
+    for folder in (path.resolve().parent, path.parent):
+        message = message.replace(f"{folder}/", "")
+    return message.replace(path.name, f"uploaded{path.suffix}")
 
 
 def read_kml(source: Path | str) -> gpd.GeoDataFrame:
     layers = [name for name, _ in pyogrio.list_layers(source)]
-    if not layers:
-        raise UnreadableFile("kml has no layers")
     frames = [gpd.read_file(source, layer=name, engine="pyogrio") for name in layers]
     frames = [frame for frame in frames if len(frame)]
     if not frames:
