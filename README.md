@@ -1,7 +1,7 @@
 geospatial file measurement api
 
 this is a backend service that takes a geospatial file and gives back measurements for the features inside it.
-you upload a kml file or a zip that has a shapefile in it.
+you upload a kml, kmz or geojson file, or a zip that has a shapefile in it.
 the service reads every feature, stores it, and works out the area for polygons and the length for lines.
 points are stored but they dont get a measurement.
 it is built with fastapi, sqlalchemy, sqlite, geopandas, shapely and pyproj.
@@ -15,9 +15,9 @@ app/database.py creates the sqlalchemy engine and the session that each request 
 app/models.py has the two tables, one for uploaded files and one for the features inside them.
 app/schemas.py has the pydantic models that shape the json responses.
 app/routes.py has the api endpoints.
-app/services.py handles an upload from start to finish, it saves the file, reads it, measures every feature and stores the result.
-app/readers.py reads a kml or a zipped shapefile into a geodataframe and figures out the crs.
-app/measure.py has the measurement logic, it picks a projection for each feature and calculates area or length.
+app/services.py handles an upload from start to finish, it saves the file, reads it, measures every feature and stores the result, and it also works out the totals for the summary.
+app/readers.py reads a kml, kmz, geojson or zipped shapefile into a geodataframe and figures out the crs.
+app/measure.py has the measurement logic, it picks a projection for each feature and calculates area or length, and it converts units.
 tests/conftest.py has the test client and helpers that build sample kml and shapefile zips.
 tests/test_measure.py tests the measurement logic directly.
 tests/test_api.py tests the endpoints with real uploads.
@@ -61,7 +61,7 @@ api
 POST /api/files/
 uploads and processes a file.
 it is a multipart form upload and the field name is file.
-it accepts a .kml file or a .zip that contains exactly one shapefile with its .shp, .shx and .dbf parts.
+it accepts a .kml, .kmz or .geojson file, or a .zip that contains exactly one shapefile with its .shp, .shx and .dbf parts.
 
 ```
 curl -X POST http://localhost:8000/api/files/ -F "file=@survey.kml"
@@ -82,7 +82,7 @@ curl -X POST http://localhost:8000/api/files/ -F "file=@survey.kml"
 ```
 
 it returns 201 when the file was processed.
-it returns 415 if the extension is not .kml or .zip, 400 if the file is empty and 413 if it is bigger than the limit.
+it returns 415 if the extension is not one of those, 400 if the file is empty and 413 if it is bigger than the limit.
 it returns 422 if the file has the right extension but cant be read, and the body has status FAILED with the reason.
 
 ```
@@ -99,6 +99,15 @@ it returns 422 if the file has the right extension but cant be read, and the bod
 }
 ```
 
+GET /api/files/
+lists the uploaded files, newest first.
+it takes limit and offset query params, limit is 100 by default and 1000 at most.
+the response has total, limit, offset and a files list, and each item is the same shape as the upload response.
+
+```
+curl http://localhost:8000/api/files/
+```
+
 GET /api/files/{id}/
 returns information about an uploaded file.
 the response is the same shape as the upload response above.
@@ -108,9 +117,21 @@ it returns 404 if the id does not exist.
 curl http://localhost:8000/api/files/01fee8eece33463d9c3b9da6d57ec8d1/
 ```
 
+DELETE /api/files/{id}/
+deletes a file and all of its features.
+it returns 204 with no body, and 404 if the id does not exist.
+
+```
+curl -X DELETE http://localhost:8000/api/files/01fee8eece33463d9c3b9da6d57ec8d1/
+```
+
 GET /api/files/{id}/measurements/
 returns the measurement for every feature in the file.
 it takes limit and offset query params, limit is 100 by default and 1000 at most.
+it also takes area_unit and length_unit.
+area_unit can be square_metre, hectare, square_kilometre or acre, and the default is square_metre.
+length_unit can be metre, kilometre, mile or foot, and the default is metre.
+a unit that is not in the list returns 422.
 
 ```
 curl http://localhost:8000/api/files/01fee8eece33463d9c3b9da6d57ec8d1/measurements/
@@ -151,6 +172,28 @@ curl http://localhost:8000/api/files/01fee8eece33463d9c3b9da6d57ec8d1/measuremen
       "note": "no measurement for point geometry"
     }
   ]
+}
+```
+
+GET /api/files/{id}/summary/
+returns the totals for a file, so the client does not have to page through every measurement to add them up.
+it takes the same area_unit and length_unit params.
+measured_count is the number of features that got a measurement.
+
+```
+curl "http://localhost:8000/api/files/01fee8eece33463d9c3b9da6d57ec8d1/summary/?area_unit=hectare&length_unit=kilometre"
+```
+
+```
+{
+  "file_id": "01fee8eece33463d9c3b9da6d57ec8d1",
+  "feature_count": 3,
+  "measured_count": 2,
+  "geometry_types": {"LineString": 1, "Point": 1, "Polygon": 1},
+  "total_area": 117.60829673578593,
+  "area_unit": "hectare",
+  "total_length": 1.5343104335972617,
+  "length_unit": "kilometre"
 }
 ```
 
@@ -200,6 +243,8 @@ the upload comes in and the extension is checked first.
 the file is written to disk in 1 MB chunks and rejected if it goes over the size limit.
 a kml is opened layer by layer, because every folder in a kml is a separate layer, and the layers are joined into one table.
 a zip is checked to make sure it has exactly one .shp and its .shx and .dbf, then it is read straight from the zip without extracting it.
+a kmz is a zip with a kml inside, so the kml is found, doc.kml first if it is there, and read from inside the archive the same way.
+a geojson is read directly.
 the crs is taken from the file.
 each feature gets an index, its geometry type, its geometry as geojson, its properties and its measurement, and all of it is saved in one transaction.
 the uploaded file is deleted from disk after that because everything needed is in the database.
@@ -213,7 +258,8 @@ the z value is dropped because area and length are measured on the ground.
 if a polygon is invalid, like a bowtie shape, it is repaired first and a note is added.
 the geometry is converted to lon lat, then to a projection made for that feature, and then shapely calculates the area or the length.
 multipolygons and multilines work the same way, the parts are added up, and holes in polygons are subtracted.
-area is in square metres and length is in metres.
+area is stored in square metres and length in metres.
+other units are worked out from those when the measurements or the summary are requested.
 
 crs handling
 nothing is ever measured in degrees.
@@ -223,7 +269,10 @@ then for each feature i build a projection centred on the middle of that feature
 for polygons it is a lambert azimuthal equal area projection, which keeps area correct.
 for lines it is an azimuthal equidistant projection, which keeps distances correct close to its centre.
 the projection that was used is returned in measurement_crs so the result can be checked.
-kml is always EPSG:4326 by its spec.
+if a feature is more than 180 degrees wide in lon lat, it is treated as crossing the 180 degree line, and the centre is worked out with the longitudes moved to 0 to 360 first.
+without this the centre of a feature near 179 and -179 lands on the other side of the earth and the numbers come out wrong.
+kml and kmz are always EPSG:4326 by their spec.
+geojson is EPSG:4326 too unless the file has its own crs member, and then that one is used.
 if a shapefile has no .prj file and all the coordinates fit inside lon lat ranges, i assume EPSG:4326 and set crs_assumed to true.
 if it has no .prj and the coordinates dont look like lon lat, the features are stored but not measured, because guessing would give wrong numbers.
 the stored geometry stays in the original crs of the file, only the measurement uses the projected version.
@@ -232,7 +281,7 @@ the stored geometry stays in the original crs of the file, only the measurement 
 design decisions
 
 fastapi instead of django
-the service has four endpoints and no admin, auth or templates, so django would be mostly unused.
+the service has seven endpoints and no admin, auth or templates, so django would be mostly unused.
 fastapi also gives request validation and the /docs page for free.
 django with drf would make more sense if this grew into a bigger app with users and permissions.
 
@@ -242,7 +291,7 @@ sqlalchemy is used so moving to postgres later is a change of the DATABASE_URL a
 i thought about postgres with postgis but the service does no spatial queries, it only stores and returns features, so geometry is kept as geojson in a json column.
 
 geopandas with pyogrio for reading
-both shapefile and kml are read by the same library, so there is one code path after the file is opened.
+shapefile, kml, kmz and geojson are all read by the same library, so there is one code path after the file is opened.
 the pyogrio wheels come with gdal inside them, so pip install is enough and gdal does not have to be installed on the system.
 the other option was fiona or gdal directly, which is harder to install and needs more code.
 
@@ -279,6 +328,31 @@ an unreadable file returns 422 but the record is kept with the error, so GET /ap
 pagination on features and measurements
 a file can have thousands of features and returning all of them in one response would be slow.
 
+summary endpoint
+once the measurements are paginated the client cant get a total without fetching every page.
+the totals are worked out by the database with one grouped query, so it does not load the features into python.
+
+units are converted when reading, not when storing
+the database always has square metres and metres.
+the unit is only a query param on the measurements and summary endpoints.
+this way the same file can be read in hectares by one client and acres by another, and nothing has to be measured again.
+the allowed units are a fixed list, so a wrong unit is rejected by fastapi with a 422 before any query runs.
+
+kmz and geojson
+kmz is what google earth saves by default, so a kml only service would reject a lot of real files.
+it is read from inside the archive like the shapefile zip, nothing is extracted.
+geojson was added because the reader already supports it, it was one small function.
+
+list and delete
+without a list endpoint an id that was lost could never be found again.
+delete removes the file row and its features together, the features are removed through the sqlalchemy relationship cascade.
+
+features crossing the 180 degree line
+the projection is centred on the feature, so the only thing that broke at the 180 line was finding the centre.
+in my test a small polygon across the line was 0.02 percent off and a line was more than 5 times too long.
+moving the longitudes to 0 to 360 before taking the centre fixed both, and they now match the same shape placed at 0 degrees.
+i did not split the geometry at the line, because the projection does not care about the line once its centre is right.
+
 docker
 docker is not needed to run this, because the gdal library comes inside the pyogrio wheel.
 i still added a small Dockerfile for anyone who does not want to install python.
@@ -290,11 +364,12 @@ i added them because the measurement numbers are easy to get wrong without notic
 
 known limits
 
-a feature that crosses the 180 degree line will be measured wrong.
+a feature that is really more than 180 degrees wide and does not cross the 180 degree line is treated as if it crosses it.
 for very large features the edges between points are treated as straight lines in the projection, so the result depends on how many points the shape has.
 length for a line that is thousands of km long is less accurate, because azimuthal equidistant is only exact for distances from its centre.
 a zip with more than one shapefile is rejected.
-kmz files are not supported.
+a kmz with more than one kml inside only has doc.kml read, or the first kml if there is no doc.kml.
+geojson is only accepted with the .geojson extension, not .json.
 kml files come back with a few extra properties like tessellate and extrude, these are added by the kml driver.
 
 
@@ -304,16 +379,16 @@ measuring in degrees is not the only mistake, picking any projected crs is also 
 checking results against a second method, geodesic in this case, is what showed the problem with utm.
 a shapefile is really several files and it can be missing its crs, so the reader has to check before trusting it.
 kml stores each folder as its own layer and every geometry has a z value.
+the 180 degree line only breaks things if the code depends on the middle of the longitudes, the projection itself is fine with it.
+sqlite does not keep the timezone of a datetime, so the time has to be marked as utc again when it is read back.
 keeping the measurement code separate from fastapi made it much easier to test.
 
 
 future scope
 
 background processing with a job queue for very large files, with the client polling the status.
-support for kmz, geojson and geopackage.
-handling of features that cross the 180 degree line.
+support for geopackage and other formats.
 splitting long edges into smaller pieces before projecting, for better accuracy on very large features.
 postgres with postgis if spatial queries are needed, like finding features inside a bounding box.
-an option to pick the units, like hectares or km.
 authentication and per user files.
-a delete endpoint and cleanup of old files.
+automatic cleanup of old files.
