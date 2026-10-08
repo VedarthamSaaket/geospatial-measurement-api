@@ -58,6 +58,9 @@ docker run -p 8000:8000 geo-api
 
 api
 
+every path below works with or without the slash at the end.
+opening http://localhost:8000/ sends you to the docs page.
+
 POST /api/files/
 uploads and processes a file.
 it is a multipart form upload and the field name is file.
@@ -157,7 +160,7 @@ curl http://localhost:8000/api/files/01fee8eece33463d9c3b9da6d57ec8d1/measuremen
       "index": 1,
       "geometry_type": "LineString",
       "measurement_type": "length",
-      "value": 1534.3104335972616,
+      "value": 1534.3104335968108,
       "unit": "metre",
       "measurement_crs": "+proj=aeqd +lat_0=17.385 +lon_0=78.475 +datum=WGS84 +units=m",
       "note": null
@@ -192,13 +195,14 @@ curl "http://localhost:8000/api/files/01fee8eece33463d9c3b9da6d57ec8d1/summary/?
   "geometry_types": {"LineString": 1, "Point": 1, "Polygon": 1},
   "total_area": 117.60829673578593,
   "area_unit": "hectare",
-  "total_length": 1.5343104335972617,
+  "total_length": 1.5343104335968107,
   "length_unit": "kilometre"
 }
 ```
 
 GET /api/files/{id}/features/
-returns the stored features with their geometry and properties.
+returns the stored features with their index, geometry type, geometry, crs and properties.
+the geometry is in the crs of the file, and that crs is on every feature.
 this one is not in the minimum requirements, i added it because the features are extracted anyway and there was no way to see them.
 it takes the same limit and offset params.
 
@@ -221,6 +225,7 @@ curl "http://localhost:8000/api/files/01fee8eece33463d9c3b9da6d57ec8d1/features/
         "type": "Polygon",
         "coordinates": [[[78.47, 17.38, 0.0], [78.48, 17.38, 0.0], [78.48, 17.39, 0.0], [78.47, 17.39, 0.0], [78.47, 17.38, 0.0]]]
       },
+      "crs": "EPSG:4326",
       "properties": {"Name": "plot a", "tessellate": -1, "extrude": 0, "visibility": -1}
     }
   ]
@@ -249,15 +254,24 @@ the crs is taken from the file.
 each feature gets an index, its geometry type, its geometry as geojson, its properties and its measurement, and all of it is saved in one transaction.
 the uploaded file is deleted from disk after that because everything needed is in the database.
 if the file cant be read, the file record is still saved with status FAILED and the reason.
+the reason never has the server folder in it, the path is cut out of the error before it is saved.
+a kml or geojson that is valid but has no features is COMPLETED with a feature count of 0.
 
 measurement calculation flow
 a feature with no geometry gets no measurement and a note saying so.
 points and multipoints get no measurement.
 any other type that is not a polygon or a line, like a geometry collection, gets no measurement and a note, it does not crash the upload.
 the z value is dropped because area and length are measured on the ground.
-if a polygon is invalid, like a bowtie shape, it is repaired first and a note is added.
-the geometry is converted to lon lat, then to a projection made for that feature, and then shapely calculates the area or the length.
-multipolygons and multilines work the same way, the parts are added up, and holes in polygons are subtracted.
+the geometry is converted to lon lat first.
+if a coordinate is not a number or the latitude is outside -90 to 90, the feature gets no measurement and a note, the rest of the file is still measured.
+a polygon is then converted to a projection made for that feature and shapely calculates the area.
+if the projected polygon is invalid, like a bowtie shape, it is repaired and a note is added.
+this check is done after projecting, because a shape across the 180 degree line looks broken in lon lat when it is really fine.
+multipolygons work the same way, the parts are added up, and holes are subtracted.
+a line is measured in sections.
+if any point of the line is more than 50 km from the centre of its projection, the line is cut in half and each half gets its own projection, and this repeats until the sections are small enough.
+a section with only two points is projected from its first point, because distances from the centre are exact in that projection.
+the parts of a multiline are measured one by one and added up.
 area is stored in square metres and length in metres.
 other units are worked out from those when the measurements or the summary are requested.
 
@@ -269,6 +283,7 @@ then for each feature i build a projection centred on the middle of that feature
 for polygons it is a lambert azimuthal equal area projection, which keeps area correct.
 for lines it is an azimuthal equidistant projection, which keeps distances correct close to its centre.
 the projection that was used is returned in measurement_crs so the result can be checked.
+for a line that was measured in sections, measurement_crs is the projection centred on the whole line and the note says that sections were used.
 if a feature is more than 180 degrees wide in lon lat, it is treated as crossing the 180 degree line, and the centre is worked out with the longitudes moved to 0 to 360 first.
 without this the centre of a feature near 179 and -179 lands on the other side of the earth and the numbers come out wrong.
 kml and kmz are always EPSG:4326 by their spec.
@@ -305,6 +320,22 @@ web mercator was not an option, it was about 10 percent off for area at 17 degre
 i also considered skipping projection and using geodesic area on the ellipsoid directly, but the assignment asks to transform to a projected crs before measuring.
 one projection per file would be faster, but a file can cover a whole country and then features far from the centre get distorted.
 
+measuring lines in sections
+an azimuthal equidistant projection is only exact for distances from its centre, so it gets worse as a line gets longer.
+with one projection for the whole line, a 13000 km long line was 0.5 percent off and a multiline with two parts on different continents was 4.6 percent off.
+with sections every case i tested matched the geodesic length to better than 0.001 percent, and short lines are still measured in one projection like before.
+polygons dont need this, lambert azimuthal equal area keeps area correct everywhere and not only at the centre.
+
+checking validity after projecting
+at first i repaired invalid polygons in the file crs before projecting.
+a circle drawn across the 180 degree line then got repaired into the wrong shape, because in lon lat its points jump from 180 to -180.
+in the projected plane it is a normal circle, so that is where the check is done now.
+
+paths with and without the slash
+the assignment writes the paths with a slash at the end, so those are the real routes.
+fastapi answers a path without the slash with a 307 redirect, and a client that does not follow redirects just sees an empty response, and an upload gets sent twice.
+so a small middleware adds the slash before routing, and both forms give the same answer with no redirect.
+
 processing inside the upload request
 the file is processed while the request is open and the response comes back with the final status.
 this keeps the service to one process with nothing else to run.
@@ -319,6 +350,7 @@ the zip is still checked first so the error says exactly which part is missing.
 
 one bad feature does not fail the file
 a feature that cant be measured gets a null value and a note explaining why.
+this covers missing geometry, unsupported types, coordinates outside the valid range and anything else that goes wrong while measuring.
 the client still gets every other feature.
 only a file that cant be opened at all is marked FAILED.
 
@@ -365,8 +397,10 @@ i added them because the measurement numbers are easy to get wrong without notic
 known limits
 
 a feature that is really more than 180 degrees wide and does not cross the 180 degree line is treated as if it crosses it.
-for very large features the edges between points are treated as straight lines in the projection, so the result depends on how many points the shape has.
-length for a line that is thousands of km long is less accurate, because azimuthal equidistant is only exact for distances from its centre.
+for very large polygons the edges between points are treated as straight lines in the projection, so the result depends on how many points the shape has.
+compared with geodesic edges, a square with only 4 points was 0.004 percent off at 1 degree wide, 0.1 percent at 5 degrees and 0.4 percent at 10 degrees.
+a 1000 km wide shape with 72 points was within 0.001 percent, so this only matters for huge shapes with very few points.
+if two files are sent in the same upload only the last one is processed.
 a zip with more than one shapefile is rejected.
 a kmz with more than one kml inside only has doc.kml read, or the first kml if there is no doc.kml.
 geojson is only accepted with the .geojson extension, not .json.
@@ -380,6 +414,9 @@ checking results against a second method, geodesic in this case, is what showed 
 a shapefile is really several files and it can be missing its crs, so the reader has to check before trusting it.
 kml stores each folder as its own layer and every geometry has a z value.
 the 180 degree line only breaks things if the code depends on the middle of the longitudes, the projection itself is fine with it.
+a shape can be valid on the earth and invalid in lon lat, so validity has to be checked in the plane where it is measured.
+error text from a library can carry server paths, so it has to be cleaned before it is shown to a client.
+testing with odd files found more bugs than testing with good ones, like a geojson with no properties and a line with two identical points.
 sqlite does not keep the timezone of a datetime, so the time has to be marked as utc again when it is read back.
 keeping the measurement code separate from fastapi made it much easier to test.
 
