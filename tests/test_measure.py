@@ -10,6 +10,16 @@ PLOT = box(78.47, 17.38, 78.48, 17.39)
 ROAD = LineString([(78.47, 17.38), (78.48, 17.39)])
 
 
+def circle(lon, lat, radius, points=72):
+    ring = [GEOD.fwd(lon, lat, 360 * i / points, radius)[:2] for i in range(points)]
+    return Polygon(ring)
+
+
+def geodesic_area(polygon):
+    lons, lats = zip(*polygon.exterior.coords)
+    return abs(GEOD.polygon_area_perimeter(lons, lats)[0])
+
+
 def test_polygon_area_matches_geodesic_area():
     result = measure(PLOT, "EPSG:4326")
     expected = abs(GEOD.geometry_area_perimeter(PLOT)[0])
@@ -83,3 +93,30 @@ def test_feature_crossing_the_180_line_is_measured_like_any_other():
     line = LineString([(179.95, 10), (-179.95, 10.1)])
     expected = GEOD.geometry_length(LineString([(-0.05, 10), (0.05, 10.1)]))
     assert measure(line, "EPSG:4326").value == pytest.approx(expected, rel=1e-6)
+
+
+def test_circle_across_the_180_line_is_not_broken_by_repair():
+    for lon, lat in ((179.99, 17), (-179.99, -45), (180, 80)):
+        shape = circle(lon, lat, 5000)
+        result = measure(shape, "EPSG:4326")
+        assert result.note is None
+        assert result.value == pytest.approx(geodesic_area(shape), rel=1e-6)
+
+
+def test_polygon_around_the_pole():
+    cap = Polygon([(lon, 85) for lon in range(-180, 180)])
+    assert measure(cap, "EPSG:4326").value == pytest.approx(geodesic_area(cap), rel=1e-4)
+
+
+def test_bad_coordinates_are_reported_not_raised():
+    not_a_number = Polygon([(0, 0), (1, float("nan")), (1, 1), (0, 0)])
+    for shape, crs in ((box(10, 94, 11, 95), "EPSG:4326"), (not_a_number, "EPSG:4326"), (box(5e7, 5e7, 6e7, 6e7), "EPSG:32644")):
+        result = measure(shape, crs)
+        assert result.value is None
+        assert "outside the valid range" in result.note
+    assert measure(PLOT, "EPSG:999999").note == "feature could not be measured"
+
+
+def test_degenerate_shapes_measure_as_zero():
+    assert measure(LineString([(78.47, 17.38), (78.47, 17.38)]), "EPSG:4326").value == 0
+    assert measure(Polygon([(78.47, 17.38), (78.48, 17.38), (78.47, 17.38)]), "EPSG:4326").value == 0

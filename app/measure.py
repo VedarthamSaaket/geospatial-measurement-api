@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from functools import lru_cache
 
+import numpy as np
 import shapely
 from pyproj import CRS, Transformer
 from shapely.geometry.base import BaseGeometry
@@ -33,18 +34,26 @@ def measure(geometry: BaseGeometry | None, source_crs: str | None) -> Measuremen
     if source_crs is None:
         return Measurement(note="file has no crs so measurement was skipped")
 
-    note = None
-    geometry = shapely.force_2d(geometry)
-    if not geometry.is_valid:
-        geometry = keep_same_kind(shapely.make_valid(geometry), kind)
-        note = "geometry was invalid and was repaired before measuring"
+    try:
+        return calculate(shapely.force_2d(geometry), kind in AREA_TYPES, source_crs)
+    except Exception:
+        return Measurement(note="feature could not be measured")
+
+
+def calculate(geometry: BaseGeometry, is_area: bool, source_crs: str) -> Measurement:
     lonlat = reproject(geometry, source_crs, WGS84)
-    is_area = kind in AREA_TYPES
-    target = local_projection(lonlat, is_area)
+    lons, lats = shapely.get_coordinates(lonlat).T
+    if not (np.isfinite(lons).all() and (np.abs(lats) <= 90).all()):
+        return Measurement(note="coordinates are outside the valid range of the file crs")
+    target = local_projection(lons, lats, is_area)
     projected = reproject(lonlat, WGS84, target)
+    note = None
+    if is_area and not projected.is_valid:
+        projected = keep_polygons(shapely.make_valid(projected))
+        note = "geometry was invalid and was repaired before measuring"
     if is_area:
         return Measurement("area", projected.area, "square_metre", target, note)
-    return Measurement("length", projected.length, "metre", target, note)
+    return Measurement("length", projected.length, "metre", target, None)
 
 
 def convert(measurement_type: str | None, value: float | None, area_unit: str, length_unit: str):
@@ -55,8 +64,7 @@ def convert(measurement_type: str | None, value: float | None, area_unit: str, l
     return value / LENGTH_UNITS[length_unit], length_unit
 
 
-def local_projection(lonlat: BaseGeometry, is_area: bool) -> str:
-    lons, lats = shapely.get_coordinates(lonlat).T
+def local_projection(lons: np.ndarray, lats: np.ndarray, is_area: bool) -> str:
     if lons.max() - lons.min() > 180:
         lons = lons % 360
     lon = round((lons.min() + lons.max()) / 2, 6)
@@ -77,7 +85,6 @@ def transformer(source: str, target: str) -> Transformer:
     return Transformer.from_crs(CRS.from_user_input(source), CRS.from_user_input(target), always_xy=True)
 
 
-def keep_same_kind(geometry: BaseGeometry, kind: str) -> BaseGeometry:
-    wanted = AREA_TYPES if kind in AREA_TYPES else LENGTH_TYPES
-    parts = [g for g in getattr(geometry, "geoms", [geometry]) if g.geom_type in wanted]
+def keep_polygons(geometry: BaseGeometry) -> BaseGeometry:
+    parts = [g for g in getattr(geometry, "geoms", [geometry]) if g.geom_type in AREA_TYPES]
     return shapely.union_all(parts)
