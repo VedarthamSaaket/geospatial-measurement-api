@@ -1,11 +1,13 @@
 import io
 import math
+from concurrent.futures import ThreadPoolExecutor
 
 import geopandas as gpd
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from shapely.geometry import LineString, Point, box
+from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 from app import database, services
@@ -129,3 +131,24 @@ def test_only_sqlite_gets_the_sqlite_settings(monkeypatch):
     monkeypatch.setattr(database, "create_engine", lambda url, **options: calls.append((url, options)))
     database.build_engine("postgresql://db/geo")
     assert calls == [("postgresql://db/geo", {})]
+
+
+def test_uploads_at_the_same_time_are_all_stored(tmp_path, monkeypatch):
+    engine = database.build_engine(f"sqlite:///{tmp_path / 'app.db'}")
+    database.Base.metadata.create_all(engine)
+    TestSession = sessionmaker(bind=engine, expire_on_commit=False)
+
+    def file_session():
+        with TestSession() as session:
+            yield session
+
+    def send(number):
+        return upload(TestClient(app), f"survey{number}.kml", KML.encode()).status_code
+
+    monkeypatch.setattr(services, "UPLOAD_DIR", tmp_path)
+    monkeypatch.setitem(app.dependency_overrides, database.get_session, file_session)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        assert list(pool.map(send, range(16))) == [201] * 16
+    with TestSession() as session:
+        assert len(session.scalars(select(services.UploadedFile)).all()) == 16
+        assert session.scalar(select(func.count()).select_from(services.Feature)) == 48
