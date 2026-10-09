@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from shapely.geometry import LineString, Point, box
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app import database, services
@@ -108,7 +107,7 @@ def test_save_stream_limits(tmp_path, monkeypatch):
 
 def test_real_startup_creates_the_data_folder_and_database(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
-    engine = create_engine(f"sqlite:///{data_dir / 'app.db'}", connect_args={"check_same_thread": False})
+    engine = database.build_engine(f"sqlite:///{data_dir / 'app.db'}")
     monkeypatch.setattr(database, "DATA_DIR", data_dir)
     monkeypatch.setattr(database, "UPLOAD_DIR", data_dir / "uploads")
     monkeypatch.setattr(database, "engine", engine)
@@ -119,4 +118,14 @@ def test_real_startup_creates_the_data_folder_and_database(tmp_path, monkeypatch
         assert upload(client, "survey.kml", KML.encode()).status_code == 201
         assert client.get("/api/files/").json()["total"] == 1
     assert (data_dir / "app.db").exists()
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("PRAGMA journal_mode").scalar() == "wal"
+        assert connection.exec_driver_sql("PRAGMA busy_timeout").scalar() == database.BUSY_TIMEOUT_MS
     assert list((data_dir / "uploads").iterdir()) == []
+
+
+def test_only_sqlite_gets_the_sqlite_settings(monkeypatch):
+    calls = []
+    monkeypatch.setattr(database, "create_engine", lambda url, **options: calls.append((url, options)))
+    database.build_engine("postgresql://db/geo")
+    assert calls == [("postgresql://db/geo", {})]

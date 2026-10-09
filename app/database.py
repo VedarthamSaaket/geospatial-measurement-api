@@ -1,10 +1,28 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import DATA_DIR, DATABASE_URL, UPLOAD_DIR
 
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+BUSY_TIMEOUT_MS = 5000
+
+
+def build_engine(url: str) -> Engine:
+    if not url.startswith("sqlite"):
+        return create_engine(url)
+    built = create_engine(url, connect_args={"check_same_thread": False})
+    event.listen(built, "connect", prepare_sqlite)
+    return built
+
+
+def prepare_sqlite(connection, _record):
+    cursor = connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+    cursor.close()
+
+
+engine = build_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
