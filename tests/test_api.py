@@ -166,6 +166,22 @@ def test_corrupt_files_do_not_crash(client):
     assert upload(client, "fake.geojson", b"not json").status_code == 422
 
 
+def test_failure_after_reading_is_saved_as_failed(client, kml_bytes, monkeypatch):
+    def broken(geometry):
+        raise ValueError("/srv/secret/path")
+
+    monkeypatch.setattr(services.shapely, "to_geojson", broken)
+    response = upload(client, "survey.kml", kml_bytes)
+    assert response.status_code == 422
+    body = response.json()
+    assert body["status"] == "FAILED"
+    assert body["error"] == "file could not be processed"
+    assert body["feature_count"] == 0
+    assert body["crs"] is None
+    assert client.get(f"/api/files/{body['id']}/").json()["status"] == "FAILED"
+    assert client.get(f"/api/files/{body['id']}/features/").json()["features"] == []
+
+
 def test_rejected_uploads(client, monkeypatch):
     assert upload(client, "notes.txt", b"hello").status_code == 415
     assert upload(client, "empty.kml", b"").status_code == 400

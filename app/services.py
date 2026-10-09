@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from typing import BinaryIO
 
+import geopandas as gpd
 import pandas as pd
 import shapely
 from sqlalchemy import func, select
@@ -51,11 +52,22 @@ def save_stream(stream: BinaryIO, path: Path):
 
 def process(record: UploadedFile, path: Path):
     try:
-        frame = read_geofile(path)
+        extract(record, read_geofile(path))
     except UnreadableFile as exc:
-        record.status = "FAILED"
-        record.error = str(exc)[:500]
-        return
+        mark_failed(record, str(exc))
+    except Exception:
+        mark_failed(record, "file could not be processed")
+
+
+def mark_failed(record: UploadedFile, reason: str):
+    record.features = []
+    record.feature_count = 0
+    record.crs, record.crs_assumed = None, False
+    record.status = "FAILED"
+    record.error = reason[:500]
+
+
+def extract(record: UploadedFile, frame: gpd.GeoDataFrame):
     record.crs, record.crs_assumed = detect_crs(frame)
     source_crs = frame.crs.to_wkt() if frame.crs else (WGS84 if record.crs_assumed else None)
     attributes = pd.DataFrame(frame.drop(columns=frame.geometry.name))
