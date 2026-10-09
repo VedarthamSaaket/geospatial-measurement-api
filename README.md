@@ -26,6 +26,7 @@ tests/test_units.py tests the small internal functions one by one against values
 requirements.txt lists the python packages the app uses directly.
 constraints.txt has the exact version of every package that gets installed, including the ones that come in through other packages.
 pyproject.toml has the pytest and coverage settings.
+.github/workflows/tests.yml runs the tests on github for every push.
 Dockerfile builds an image that runs the app the same way on any machine.
 
 
@@ -480,6 +481,8 @@ the assignment does not ask for tests.
 i added them because the measurement numbers are easy to get wrong without noticing, so the tests compare them with geodesic values from pyproj.
 there are 63 tests and they run every line and every branch of the app code.
 this is checked on every run by pytest-cov, and the run fails if coverage drops below 100 percent.
+a github actions workflow installs the pinned packages on a clean linux machine and runs the same tests on every push.
+i ran the same steps in a clean linux container before adding it, and all 63 tests passed there.
 some check the result from outside through the api, and some call one function and compare it with a value worked out by hand.
 for example one degree along the equator has to be 6378137 times pi divided by 180 metres, and a 100 m square at the centre of a utm zone has to be 10000 divided by 0.9996 squared square metres.
 there is also a test that sends 16 uploads from 8 threads to a real sqlite file and checks that all of them are stored.
