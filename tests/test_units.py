@@ -11,10 +11,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 from app import database, services
-from app.edges import geodesic_path, metres_per_unit, straight_edges
+from app.edges import MAX_POINTS, geodesic_path, metres_per_unit, straight_edges
 from app.main import app
 from app.measure import convert, line_length, local_projection, measure
-from app.readers import UnreadableFile, clean_message, detect_crs, find_shapefile
+from app.readers import UnreadableFile, clean_message, detect_crs, find_shapefile, read_geofile
 from tests.conftest import KML, upload
 
 ONE_DEGREE_ON_EQUATOR = 6378137 * math.pi / 180
@@ -60,6 +60,15 @@ def test_geodesic_path_adds_points_only_to_long_edges():
     assert len(geodesic_path(np.array([[0.0, 0.0], [0.01, 0.0]]))) == 2
 
 
+def test_geodesic_path_stops_adding_points_at_the_cap():
+    back_and_forth = np.array([[0.0, 0.0], [170.0, 0.0]] * 4)
+    lengths = [170 * ONE_DEGREE_ON_EQUATOR] * 7
+    assert sum(lengths) / MAX_POINTS > 10_000
+    path = geodesic_path(back_and_forth)
+    assert MAX_POINTS - len(lengths) <= len(path) <= MAX_POINTS + len(back_and_forth)
+    assert path[0] == (0.0, 0.0) and path[-1] == (170.0, 0.0)
+
+
 def test_straight_edges_step_follows_the_crs_unit():
     assert metres_per_unit("EPSG:4326") is None
     assert metres_per_unit("EPSG:32644") == 1
@@ -93,6 +102,21 @@ def test_clean_message_removes_folders(tmp_path):
     path = tmp_path / "abc123.zip"
     raw = f"'/vsizip/{path.resolve()}/layer.shp' not recognized; try another driver"
     assert clean_message(Exception(raw), path) == "'uploaded.zip/layer.shp' not recognized"
+
+
+def test_read_geofile_turns_any_reader_error_into_unreadable_file(tmp_path):
+    broken = tmp_path / "abc123.geojson"
+    broken.write_bytes(b"not json")
+    with pytest.raises(UnreadableFile, match="could not read file") as error:
+        read_geofile(broken)
+    assert str(tmp_path) not in str(error.value)
+    assert "abc123" not in str(error.value)
+    not_a_zip = tmp_path / "abc123.kmz"
+    not_a_zip.write_bytes(b"not a zip")
+    with pytest.raises(UnreadableFile, match="^file is not a valid zip archive$"):
+        read_geofile(not_a_zip)
+    with pytest.raises(UnreadableFile, match="could not read file"):
+        read_geofile(tmp_path / "missing.kml")
 
 
 def test_save_stream_limits(tmp_path, monkeypatch):
