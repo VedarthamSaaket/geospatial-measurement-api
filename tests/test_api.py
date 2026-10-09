@@ -167,6 +167,16 @@ def test_corrupt_files_do_not_crash(client):
     assert upload(client, "fake.geojson", b"not json").status_code == 422
 
 
+def test_features_are_stored_in_batches_and_keep_their_order(client, kml_bytes, monkeypatch):
+    monkeypatch.setattr(services, "BATCH_SIZE", 2)
+    file_id = upload(client, "survey.kml", kml_bytes).json()["id"]
+    features = client.get(f"/api/files/{file_id}/features/").json()["features"]
+    assert [f["index"] for f in features] == [0, 1, 2]
+    assert [f["geometry_type"] for f in features] == ["Polygon", "LineString", "Point"]
+    assert features[0]["properties"]["Name"] == "plot a"
+    assert client.get(f"/api/files/{file_id}/summary/").json()["measured_count"] == 2
+
+
 def test_failure_after_reading_is_saved_as_failed(client, kml_bytes, monkeypatch, caplog):
     def broken(geometry):
         raise ValueError("/srv/secret/path")

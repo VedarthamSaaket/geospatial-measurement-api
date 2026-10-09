@@ -6,7 +6,7 @@ from typing import BinaryIO
 import geopandas as gpd
 import pandas as pd
 import shapely
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select
 from sqlalchemy.orm import Session
 
 from app.config import ALLOWED_EXTENSIONS, MAX_UPLOAD_BYTES, UPLOAD_DIR
@@ -16,6 +16,7 @@ from app.readers import UnreadableFile, detect_crs, read_geofile
 
 CHUNK_SIZE = 1024 * 1024
 FORM_OVERHEAD = 64 * 1024
+BATCH_SIZE = 1000
 logger = logging.getLogger(__name__)
 
 
@@ -33,10 +34,13 @@ def handle_upload(session: Session, filename: str, stream: BinaryIO) -> Uploaded
     path = UPLOAD_DIR / f"{record.id}{extension}"
     try:
         save_stream(stream, path)
-        process(record, path)
+        rows = process(record, path)
     finally:
         path.unlink(missing_ok=True)
     session.add(record)
+    session.flush()
+    for start in range(0, len(rows), BATCH_SIZE):
+        session.execute(insert(Feature), rows[start : start + BATCH_SIZE])
     session.commit()
     return record
 
@@ -62,44 +66,46 @@ def save_stream(stream: BinaryIO, path: Path):
         raise RejectedUpload(400, "uploaded file is empty")
 
 
-def process(record: UploadedFile, path: Path):
+def process(record: UploadedFile, path: Path) -> list[dict]:
     try:
-        extract(record, read_geofile(path))
+        return extract(record, read_geofile(path))
     except UnreadableFile as exc:
         logger.warning("file %s could not be read: %s", record.id, exc)
         mark_failed(record, str(exc))
     except Exception:
         logger.exception("file %s failed while processing", record.id)
         mark_failed(record, "file could not be processed")
+    return []
 
 
 def mark_failed(record: UploadedFile, reason: str):
-    record.features = []
     record.feature_count = 0
     record.crs, record.crs_assumed = None, False
     record.status = "FAILED"
     record.error = reason[:500]
 
 
-def extract(record: UploadedFile, frame: gpd.GeoDataFrame):
+def extract(record: UploadedFile, frame: gpd.GeoDataFrame) -> list[dict]:
     record.crs, record.crs_assumed = detect_crs(frame)
     source_crs = frame.crs.to_wkt() if frame.crs else (WGS84 if record.crs_assumed else None)
     attributes = pd.DataFrame(frame.drop(columns=frame.geometry.name))
     properties = json.loads(attributes.to_json(orient="records", date_format="iso")) or [{}] * len(frame)
+    rows = []
     for index, geometry in enumerate(frame.geometry):
-        result = measure(geometry, source_crs)
-        record.features.append(
-            Feature(
-                index=index,
-                geometry_type=geometry.geom_type if geometry is not None else None,
-                geometry=json.loads(shapely.to_geojson(geometry)) if geometry is not None else None,
-                properties=properties[index],
-                **vars(result),
-            )
+        rows.append(
+            {
+                "file_id": record.id,
+                "index": index,
+                "geometry_type": geometry.geom_type if geometry is not None else None,
+                "geometry": json.loads(shapely.to_geojson(geometry)) if geometry is not None else None,
+                "properties": properties[index],
+                **vars(measure(geometry, source_crs)),
+            }
         )
-    record.feature_count = len(record.features)
+    record.feature_count = len(rows)
     record.status = "COMPLETED"
     logger.info("file %s processed with %d features", record.id, record.feature_count)
+    return rows
 
 
 def summarise(session: Session, file_id: str) -> dict:
