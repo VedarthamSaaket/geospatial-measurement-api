@@ -166,7 +166,7 @@ def test_corrupt_files_do_not_crash(client):
     assert upload(client, "fake.geojson", b"not json").status_code == 422
 
 
-def test_failure_after_reading_is_saved_as_failed(client, kml_bytes, monkeypatch):
+def test_failure_after_reading_is_saved_as_failed(client, kml_bytes, monkeypatch, caplog):
     def broken(geometry):
         raise ValueError("/srv/secret/path")
 
@@ -180,6 +180,8 @@ def test_failure_after_reading_is_saved_as_failed(client, kml_bytes, monkeypatch
     assert body["crs"] is None
     assert client.get(f"/api/files/{body['id']}/").json()["status"] == "FAILED"
     assert client.get(f"/api/files/{body['id']}/features/").json()["features"] == []
+    assert f"file {body['id']} failed while processing" in caplog.text
+    assert "/srv/secret/path" in caplog.text
 
 
 def test_rejected_uploads(client, monkeypatch):

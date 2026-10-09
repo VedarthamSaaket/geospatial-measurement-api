@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -16,6 +17,7 @@ SECTION_RADIUS = 50_000
 SHORT_EDGE_DEGREES = 0.05
 AREA_UNITS = {"square_metre": 1.0, "hectare": 10_000.0, "square_kilometre": 1_000_000.0, "acre": 4046.8564224}
 LENGTH_UNITS = {"metre": 1.0, "kilometre": 1000.0, "mile": 1609.344, "foot": 0.3048}
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -41,6 +43,7 @@ def measure(geometry: BaseGeometry | None, source_crs: str | None) -> Measuremen
     try:
         return calculate(shapely.force_2d(geometry), kind in AREA_TYPES, source_crs)
     except Exception:
+        logger.exception("a %s could not be measured", kind)
         return Measurement(note="feature could not be measured")
 
 

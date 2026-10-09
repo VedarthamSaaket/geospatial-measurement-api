@@ -1,16 +1,18 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from app.config import CORS_ORIGINS
+from app.config import CORS_ORIGINS, LOG_LEVEL
 from app.database import init_db
 from app.routes import router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     init_db()
     yield
 

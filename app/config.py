@@ -7,3 +7,4 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR / 'app.db'}")
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "50")) * 1024 * 1024
 ALLOWED_EXTENSIONS = {".kml", ".kmz", ".geojson", ".zip"}
 CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "*").split(",") if origin.strip()]
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

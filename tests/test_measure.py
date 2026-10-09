@@ -108,13 +108,14 @@ def test_polygon_around_the_pole():
     assert measure(cap, "EPSG:4326").value == pytest.approx(geodesic_area(cap), rel=1e-4)
 
 
-def test_bad_coordinates_are_reported_not_raised():
+def test_bad_coordinates_are_reported_not_raised(caplog):
     not_a_number = Polygon([(0, 0), (1, float("nan")), (1, 1), (0, 0)])
     for shape, crs in ((box(10, 94, 11, 95), "EPSG:4326"), (not_a_number, "EPSG:4326"), (box(5e7, 5e7, 6e7, 6e7), "EPSG:32644")):
         result = measure(shape, crs)
         assert result.value is None
         assert "outside the valid range" in result.note
     assert measure(PLOT, "EPSG:999999").note == "feature could not be measured"
+    assert "a Polygon could not be measured" in caplog.text
 
 
 def test_degenerate_shapes_measure_as_zero():

@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 from typing import BinaryIO
 
@@ -14,6 +15,7 @@ from app.models import Feature, UploadedFile, new_id
 from app.readers import UnreadableFile, detect_crs, read_geofile
 
 CHUNK_SIZE = 1024 * 1024
+logger = logging.getLogger(__name__)
 
 
 class RejectedUpload(Exception):
@@ -54,8 +56,10 @@ def process(record: UploadedFile, path: Path):
     try:
         extract(record, read_geofile(path))
     except UnreadableFile as exc:
+        logger.warning("file %s could not be read: %s", record.id, exc)
         mark_failed(record, str(exc))
     except Exception:
+        logger.exception("file %s failed while processing", record.id)
         mark_failed(record, "file could not be processed")
 
 
@@ -85,6 +89,7 @@ def extract(record: UploadedFile, frame: gpd.GeoDataFrame):
         )
     record.feature_count = len(record.features)
     record.status = "COMPLETED"
+    logger.info("file %s processed with %d features", record.id, record.feature_count)
 
 
 def summarise(session: Session, file_id: str) -> dict:
