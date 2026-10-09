@@ -9,9 +9,9 @@ it is built with fastapi, sqlalchemy, sqlite, geopandas, shapely and pyproj.
 
 what each file does
 
-app/main.py creates the fastapi app, sets up the database on startup and plugs in the routes.
+app/main.py creates the fastapi app, sets up logging and the database on startup, plugs in the routes and rejects a body that is too big.
 app/config.py holds the settings like where data is stored, the max upload size and the allowed file types.
-app/database.py creates the sqlalchemy engine and the session that each request uses.
+app/database.py creates the sqlalchemy engine and the session that each request uses, and sets the sqlite options.
 app/models.py has the two tables, one for uploaded files and one for the features inside them.
 app/schemas.py has the pydantic models that shape the json responses.
 app/routes.py has the api endpoints.
@@ -23,7 +23,9 @@ tests/conftest.py has the test client and helpers that build sample kml and shap
 tests/test_measure.py tests the measurement logic directly.
 tests/test_api.py tests the endpoints with real uploads.
 tests/test_units.py tests the small internal functions one by one against values worked out by hand.
-requirements.txt lists the python packages.
+requirements.txt lists the python packages the app uses directly.
+constraints.txt has the exact version of every package that gets installed, including the ones that come in through other packages.
+pyproject.toml has the pytest and coverage settings.
 Dockerfile builds an image that runs the app the same way on any machine.
 
 
@@ -36,7 +38,7 @@ git clone <repo url>
 cd geospatial-measurement-api
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -c constraints.txt
 uvicorn app.main:app --reload
 ```
 
@@ -44,12 +46,16 @@ the api runs on http://localhost:8000 and the interactive docs are on http://loc
 a data folder is created on first run and it holds the sqlite database.
 you can change the location with the DATA_DIR env variable, and the upload limit with MAX_UPLOAD_MB, the default is 50.
 CORS_ORIGINS is the list of web origins that can call the api from a browser, separated by commas, and the default is * which means any.
+LOG_LEVEL sets how much is logged, the default is INFO.
+these settings are read once when the app starts, so the app has to be restarted after changing one.
 
 to run the tests
 
 ```
 python -m pytest
 ```
+
+the test run also measures coverage and fails if any line or branch of the app code is not run.
 
 to run it with docker instead
 
@@ -89,8 +95,9 @@ curl -X POST http://localhost:8000/api/files/ -F "file=@survey.kml"
 
 it returns 201 when the file was processed.
 it returns 415 if the extension is not one of those, 400 if the file is empty and 413 if it is bigger than the limit.
+if the content length of the request already says it is over the limit, the 413 comes back before the body is read.
 it returns 400 if more than one file is sent in the same upload, and nothing is stored.
-it returns 422 if the file has the right extension but cant be read, and the body has status FAILED with the reason.
+it returns 422 if the file has the right extension but cant be read or cant be processed, and the body has status FAILED with the reason.
 
 ```
 {
@@ -248,16 +255,19 @@ models.py and database.py are the storage layer.
 this is why the measurement logic can be tested without starting the api.
 
 file processing flow
-the upload comes in and the extension is checked first.
+the content length of the request is checked before anything is read, and a body over the limit is rejected there.
+then the extension is checked.
 the file is written to disk in 1 MB chunks and rejected if it goes over the size limit.
 a kml is opened layer by layer, because every folder in a kml is a separate layer, and the layers are joined into one table.
 a zip is checked to make sure it has exactly one .shp and its .shx and .dbf, then it is read straight from the zip without extracting it.
 a kmz is a zip with a kml inside, so the kml is found, doc.kml first if it is there, and read from inside the archive the same way.
 a geojson is read directly.
 the crs is taken from the file.
-each feature gets an index, its geometry type, its geometry as geojson, its properties and its measurement, and all of it is saved in one transaction.
+each feature gets an index, its geometry type, its geometry as geojson, its properties and its measurement.
+the features are inserted 1000 at a time, and the file row and all of its features are still one transaction, so a file is never half saved.
 the uploaded file is deleted from disk after that because everything needed is in the database.
 if the file cant be read, the file record is still saved with status FAILED and the reason.
+if anything else breaks after the file was read, the record is also saved as FAILED, with the reason file could not be processed, and the real error goes to the log.
 the reason never has the server folder in it, the path is cut out of the error before it is saved.
 a kml or geojson that is valid but has no features is COMPLETED with a feature count of 0.
 
@@ -364,6 +374,43 @@ only a file that cant be opened at all is marked FAILED.
 
 failed uploads are saved
 an unreadable file returns 422 but the record is kept with the error, so GET /api/files/{id}/ can show what went wrong later.
+at first only read errors were handled this way, and an error in a later step came back as a 500 with nothing saved.
+now every step after the upload is covered, so the rule is the same no matter where it breaks.
+for an error i did not expect, the client only gets a fixed message, because the real text could have server paths or library details in it.
+
+logging
+a feature that cant be measured only gets a note, and a file that fails only gets a short reason, so without a log a real bug would look the same as a bad file.
+the full error with its traceback is logged, together with the file id, so a FAILED record can be matched to its log line.
+a line is also logged for every file that was processed, with the number of features.
+i used the logging module from python and not a logging package, the service is small and this needs nothing installed.
+
+checking the size before reading the body
+the size limit used to be checked only while the file was written to disk.
+by then the server had already received the whole body, so a 5 GB upload was fully taken in just to be rejected.
+now a middleware looks at the content length header first and answers 413 without reading anything.
+i first put this check in a fastapi dependency, and a test showed that fastapi reads the form before it runs dependencies, so it had to be a middleware.
+the limit while writing is still there, because a client can send a body with no content length or a wrong one.
+the header check allows 64 KB on top of the limit for the multipart form around the file.
+the cors middleware is added last so it wraps this one, and a browser page still gets a readable 413.
+
+sqlite in wal mode with a busy timeout
+uploads run in a thread pool, so two of them can write at the same time.
+in the default sqlite mode a writer blocks readers, and a second writer can fail with database is locked.
+wal mode lets reads go on while a write is happening, and the busy timeout makes a second writer wait up to 5 seconds and not fail at once.
+these are only set when the database is sqlite, a postgres url is left alone.
+
+inserting features in batches
+at first every feature was built as an sqlalchemy object and attached to the file before saving.
+for a big file that is a lot of objects in memory at once.
+now the features are plain rows that are inserted 1000 at a time.
+i kept it as one transaction and did not commit each batch, because a file with only some of its features saved would give wrong totals.
+the file is still read into memory in one go by geopandas, so this helps with the database part and not with the reading part.
+
+pinned versions
+requirements.txt pins the packages the app uses directly, but numpy, pandas, pydantic and others come in through them and were not pinned.
+the measurement numbers depend on those too, so constraints.txt pins every installed package and pip is run with it.
+i used a constraints file and not a second tool like poetry or uv, so the setup is still plain pip.
+the base image in the Dockerfile is pinned by its digest for the same reason, the 3.12-slim tag is moved to a new image every few weeks.
 
 pagination on features and measurements
 a file can have thousands of features and returning all of them in one response would be slow.
@@ -397,6 +444,7 @@ docker
 the app can run without docker, because the gdal library comes inside the pyogrio wheel.
 the Dockerfile is there because the numbers depend on the gdal and proj versions, and the image pins them together with python, so every machine measures with the same libraries.
 i built the image and ran the same upload tests against the container, and every measurement matched running it directly to at least 11 digits.
+i built it again after pinning the base image and the packages, and checked the upload, a failed file, the 413 for a body that is too big, the log lines and the health check inside the container.
 the container runs as a normal user and not root.
 the database is in a volume, so the files are still there after the container is restarted or replaced.
 it has a health check that calls /health.
@@ -430,9 +478,11 @@ it allows any origin by default because there is no login and no cookies, and CO
 tests
 the assignment does not ask for tests.
 i added them because the measurement numbers are easy to get wrong without noticing, so the tests compare them with geodesic values from pyproj.
-there are 56 tests and they run every line and every branch of the app code.
+there are 63 tests and they run every line and every branch of the app code.
+this is checked on every run by pytest-cov, and the run fails if coverage drops below 100 percent.
 some check the result from outside through the api, and some call one function and compare it with a value worked out by hand.
 for example one degree along the equator has to be 6378137 times pi divided by 180 metres, and a 100 m square at the centre of a utm zone has to be 10000 divided by 0.9996 squared square metres.
+there is also a test that sends 16 uploads from 8 threads to a real sqlite file and checks that all of them are stored.
 
 
 known limits
@@ -444,6 +494,10 @@ a zip with more than one shapefile is rejected.
 a kmz with more than one kml inside only has doc.kml read, or the first kml if there is no doc.kml.
 geojson is only accepted with the .geojson extension, not .json.
 kml files come back with a few extra properties like tessellate and extrude, these are added by the kml driver.
+a kml column that is empty for every feature is left out of the properties, because the kml driver adds many columns that are always empty, so a field that was really in the file but empty everywhere is dropped too.
+an upload sent without a content length is still received in full before the size limit stops it.
+the whole file is read into memory, so a very big file needs that much memory.
+the tables are created on startup and there are no migrations, so changing a column later needs a manual step.
 
 
 learning
@@ -460,6 +514,9 @@ sqlite does not keep the timezone of a datetime, so the time has to be marked as
 the same corner points can mean different shapes, and postgis, qgis and the geojson spec do not all agree on which one.
 building the docker image and testing inside it is the only way to know the Dockerfile works, reading it is not enough.
 keeping the measurement code separate from fastapi made it much easier to test.
+catching an error and returning a nice message hides bugs unless the error is also logged.
+fastapi reads the upload body before it runs dependencies, so a check that has to happen before the body must be a middleware.
+pinning only the packages i import is not the same as pinning what gets installed.
 
 
 future scope
@@ -471,3 +528,6 @@ uploading several files in one request and getting a list back.
 postgres with postgis if spatial queries are needed, like finding features inside a bounding box.
 authentication and per user files.
 automatic cleanup of old files.
+schema migrations with alembic.
+reading big files in pieces so the whole file is not in memory.
+a request id in the logs and in the error response.
