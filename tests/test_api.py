@@ -1,4 +1,5 @@
 import pytest
+from fastapi import Request
 from shapely.geometry import box
 
 from app import services
@@ -189,6 +190,20 @@ def test_rejected_uploads(client, monkeypatch):
     assert upload(client, "empty.kml", b"").status_code == 400
     monkeypatch.setattr(services, "MAX_UPLOAD_BYTES", 10)
     assert upload(client, "big.kml", b"x" * 11).status_code == 413
+
+
+def test_oversized_body_is_rejected_before_it_is_read(client, monkeypatch):
+    def never_called(*args):
+        raise AssertionError("the body was read")
+
+    monkeypatch.setattr(services, "MAX_UPLOAD_BYTES", 10)
+    monkeypatch.setattr(Request, "form", never_called)
+    content = b"x" * (services.FORM_OVERHEAD + 11)
+    response = client.post("/api/files/", files={"file": ("big.kml", content)}, headers={"Origin": "https://maps.example.com"})
+    assert response.status_code == 413
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert "larger than" in response.json()["detail"]
+    assert client.get("/api/files/").json()["total"] == 0
 
 
 def test_two_files_in_one_upload_are_rejected(client, kml_bytes, geojson_bytes):

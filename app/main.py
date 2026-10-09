@@ -3,11 +3,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.config import CORS_ORIGINS, LOG_LEVEL
 from app.database import init_db
 from app.routes import router
+from app.services import RejectedUpload, check_declared_size
 
 
 @asynccontextmanager
@@ -18,7 +19,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Geospatial File Measurement API", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 app.include_router(router)
 
 
@@ -28,6 +28,18 @@ async def accept_missing_trailing_slash(request: Request, call_next):
     if path.startswith("/api/") and not path.endswith("/"):
         request.scope["path"] = path + "/"
     return await call_next(request)
+
+
+@app.middleware("http")
+async def reject_oversized_body(request: Request, call_next):
+    try:
+        check_declared_size(request.headers.get("content-length"))
+    except RejectedUpload as exc:
+        return JSONResponse({"detail": exc.message}, status_code=exc.status_code)
+    return await call_next(request)
+
+
+app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 
 @app.get("/", include_in_schema=False)

@@ -15,6 +15,7 @@ from app.models import Feature, UploadedFile, new_id
 from app.readers import UnreadableFile, detect_crs, read_geofile
 
 CHUNK_SIZE = 1024 * 1024
+FORM_OVERHEAD = 64 * 1024
 logger = logging.getLogger(__name__)
 
 
@@ -40,13 +41,22 @@ def handle_upload(session: Session, filename: str, stream: BinaryIO) -> Uploaded
     return record
 
 
+def too_large() -> RejectedUpload:
+    return RejectedUpload(413, f"file is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+
+
+def check_declared_size(content_length: str | None):
+    if content_length and content_length.isdigit() and int(content_length) > MAX_UPLOAD_BYTES + FORM_OVERHEAD:
+        raise too_large()
+
+
 def save_stream(stream: BinaryIO, path: Path):
     written = 0
     with path.open("wb") as target:
         while chunk := stream.read(CHUNK_SIZE):
             written += len(chunk)
             if written > MAX_UPLOAD_BYTES:
-                raise RejectedUpload(413, f"file is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+                raise too_large()
             target.write(chunk)
     if written == 0:
         raise RejectedUpload(400, "uploaded file is empty")
