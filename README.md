@@ -27,7 +27,6 @@ requirements.txt lists the python packages the app uses directly.
 constraints.txt has the exact version of every package that gets installed, including the ones that come in through other packages.
 pyproject.toml has the pytest and coverage settings.
 .github/workflows/tests.yml runs the tests on github for every push.
-Dockerfile builds an image that runs the app the same way on any machine.
 
 
 setup
@@ -57,13 +56,6 @@ python -m pytest
 ```
 
 the test run also measures coverage and fails if any line or branch of the app code is not run.
-
-to run it with docker instead
-
-```
-docker build -t geo-api .
-docker run -p 8000:8000 -v geo-data:/srv/data geo-api
-```
 
 
 api
@@ -411,7 +403,6 @@ pinned versions
 requirements.txt pins the packages the app uses directly, but numpy, pandas, pydantic and others come in through them and were not pinned.
 the measurement numbers depend on those too, so constraints.txt pins every installed package and pip is run with it.
 i used a constraints file and not a second tool like poetry or uv, so the setup is still plain pip.
-the base image in the Dockerfile is pinned by its digest for the same reason, the 3.12-slim tag is moved to a new image every few weeks.
 
 pagination on features and measurements
 a file can have thousands of features and returning all of them in one response would be slow.
@@ -440,17 +431,6 @@ the projection is centred on the feature, so the only thing that broke at the 18
 in my test a small polygon across the line was 0.02 percent off and a line was more than 5 times too long.
 moving the longitudes to 0 to 360 before taking the centre fixed both, and they now match the same shape placed at 0 degrees.
 i did not split the geometry at the line, because the projection does not care about the line once its centre is right.
-
-docker
-the app can run without docker, because the gdal library comes inside the pyogrio wheel.
-the Dockerfile is there because the numbers depend on the gdal and proj versions, and the image pins them together with python, so every machine measures with the same libraries.
-i built the image and ran the same upload tests against the container, and every measurement matched running it directly to at least 11 digits.
-i built it again after pinning the base image and the packages, and checked the upload, a failed file, the 413 for a body that is too big, the log lines and the health check inside the container.
-the container runs as a normal user and not root.
-the database is in a volume, so the files are still there after the container is restarted or replaced.
-it has a health check that calls /health.
-the image is about 710 MB, most of it is the geospatial libraries.
-i used the slim python image and not alpine, because the pyogrio and shapely wheels are built for glibc and alpine would have to compile gdal.
 
 what an edge between two points means
 a file only stores the corner points, it does not say what the line between them looks like, and for a big shape that changes the area.
@@ -482,7 +462,7 @@ i added them because the measurement numbers are easy to get wrong without notic
 there are 63 tests and they run every line and every branch of the app code.
 this is checked on every run by pytest-cov, and the run fails if coverage drops below 100 percent.
 a github actions workflow installs the pinned packages on a clean linux machine and runs the same tests on every push.
-i ran the same steps in a clean linux container before adding it, and all 63 tests passed there.
+i ran the same steps there before adding the workflow, and all 63 tests passed.
 some check the result from outside through the api, and some call one function and compare it with a value worked out by hand.
 for example one degree along the equator has to be 6378137 times pi divided by 180 metres, and a 100 m square at the centre of a utm zone has to be 10000 divided by 0.9996 squared square metres.
 there is also a test that sends 16 uploads from 8 threads to a real sqlite file and checks that all of them are stored.
@@ -515,7 +495,6 @@ error text from a library can carry server paths, so it has to be cleaned before
 testing with odd files found more bugs than testing with good ones, like a geojson with no properties and a line with two identical points.
 sqlite does not keep the timezone of a datetime, so the time has to be marked as utc again when it is read back.
 the same corner points can mean different shapes, and postgis, qgis and the geojson spec do not all agree on which one.
-building the docker image and testing inside it is the only way to know the Dockerfile works, reading it is not enough.
 keeping the measurement code separate from fastapi made it much easier to test.
 catching an error and returning a nice message hides bugs unless the error is also logged.
 fastapi reads the upload body before it runs dependencies, so a check that has to happen before the body must be a middleware.
