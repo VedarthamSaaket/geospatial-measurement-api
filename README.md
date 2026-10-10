@@ -1,6 +1,6 @@
 # geospatial file measurement api
 
-A FastAPI backend service that takes a geospatial file and returns measurements for the features inside it. You upload a KML, KMZ, GeoJSON, or a zip that contains a single shapefile, and the service reads every feature, stores it, and works out the area for polygons and the length for lines, while points are stored without a measurement. It is built with FastAPI, SQLAlchemy, SQLite, GeoPandas, Shapely, and pyproj, and always stores measurements in square metres and metres, converting to other units only when they are requested.
+This is a FastAPI backend service that takes a geospatial file and returns measurements for the features inside it. You upload a KML, KMZ, GeoJSON, or a zip that contains a single shapefile, and the service reads every feature, stores it, and works out the area for polygons and the length for lines, while points are stored without a measurement. It is built with FastAPI, SQLAlchemy, SQLite, GeoPandas, Shapely, and pyproj, and always stores measurements in square metres and metres, converting to other units only when they are requested.
 
 app/main.py - creates the FastAPI app, configures logging, initializes the database on startup, mounts the routes, and rejects a request whose body is already over the upload limit.
 
