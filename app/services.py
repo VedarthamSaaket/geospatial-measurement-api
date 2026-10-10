@@ -6,11 +6,12 @@ from typing import BinaryIO
 import geopandas as gpd
 import pandas as pd
 import shapely
+from shapely.geometry import shape
 from sqlalchemy import func, insert, select
 from sqlalchemy.orm import Session
 
 from app.config import ALLOWED_EXTENSIONS, MAX_UPLOAD_BYTES, UPLOAD_DIR
-from app.measure import WGS84, measure
+from app.measure import WGS84, measure, reference_measure
 from app.models import Feature, UploadedFile, new_id
 from app.readers import UnreadableFile, detect_crs, read_geofile
 
@@ -122,3 +123,14 @@ def summarise(session: Session, file_id: str) -> dict:
             summary["measured_count"] += count
             summary[measurement_type] += total
     return summary
+
+
+def accuracy(session: Session, file_id: str, source_crs: str | None) -> dict:
+    totals = {"area": [0.0, 0.0], "length": [0.0, 0.0]}
+    query = select(Feature.geometry, Feature.measurement_type, Feature.value).where(
+        Feature.file_id == file_id, Feature.measurement_type.is_not(None)
+    )
+    for geometry, measurement_type, value in session.execute(query):
+        totals[measurement_type][0] += reference_measure(shape(geometry), source_crs)
+        totals[measurement_type][1] += value
+    return totals

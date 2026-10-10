@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi import Request
 from shapely.geometry import box
@@ -268,3 +270,49 @@ def test_cors_headers_for_a_page_on_another_origin(client):
     preflight = client.options("/api/files/", headers={**origin, "Access-Control-Request-Method": "POST"})
     assert preflight.status_code == 200
     assert "POST" in preflight.headers["access-control-allow-methods"]
+
+
+def test_summary_reports_measurement_accuracy(client, kml_bytes):
+    file_id = upload(client, "survey.kml", kml_bytes).json()["id"]
+    accuracy = client.get(f"/api/files/{file_id}/summary/").json()["accuracy"]
+    assert accuracy["area"]["measured"] > 0
+    assert accuracy["area"]["reference"] == pytest.approx(accuracy["area"]["measured"], rel=1e-4)
+    assert accuracy["area"]["error"] < accuracy["area"]["measured"]
+    assert accuracy["area"]["error_percent"] < 0.001
+    assert accuracy["length"]["error"] == pytest.approx(0, abs=1e-6)
+    assert accuracy["length"]["reference"] == pytest.approx(accuracy["length"]["measured"])
+
+
+def test_summary_accuracy_is_zero_without_measurements(client):
+    content = (
+        b'{"type": "FeatureCollection", "features": ['
+        b'{"type": "Feature", "properties": {}, '
+        b'"geometry": {"type": "Point", "coordinates": [78.47, 17.38]}}]}'
+    )
+    file_id = upload(client, "points.geojson", content).json()["id"]
+    accuracy = client.get(f"/api/files/{file_id}/summary/").json()["accuracy"]
+    assert accuracy["area"] == {"reference": 0, "measured": 0, "error": 0, "error_percent": 0}
+    assert accuracy["length"] == {"reference": 0, "measured": 0, "error": 0, "error_percent": 0}
+
+
+def test_summary_accuracy_for_a_polygon_with_a_hole(client):
+    polygon = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"name": "ring"},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [[78.47, 17.38], [78.48, 17.38], [78.48, 17.39], [78.47, 17.39], [78.47, 17.38]],
+                        [[78.475, 17.385], [78.476, 17.385], [78.476, 17.386], [78.475, 17.386], [78.475, 17.385]],
+                    ],
+                },
+            }
+        ],
+    }
+    file_id = upload(client, "ring.geojson", json.dumps(polygon).encode()).json()["id"]
+    accuracy = client.get(f"/api/files/{file_id}/summary/").json()["accuracy"]
+    assert accuracy["area"]["measured"] > 0
+    assert accuracy["area"]["error_percent"] < 0.001

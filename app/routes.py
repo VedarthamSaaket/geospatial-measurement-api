@@ -7,9 +7,10 @@ from app.database import get_session
 from app.measure import convert
 from app.models import Feature, UploadedFile
 from app.schemas import (
-    AreaUnit, FeaturePage, FileOut, FilePage, LengthUnit, MeasurementOut, MeasurementPage, SummaryOut,
+    AccuracyOut, AccuracyPair, AreaUnit, FeaturePage, FileOut, FilePage, LengthUnit,
+    MeasurementOut, MeasurementPage, SummaryOut,
 )
-from app.services import RejectedUpload, handle_upload, summarise
+from app.services import RejectedUpload, accuracy, handle_upload, summarise
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -24,6 +25,12 @@ def get_file(file_id: str, session: Session = Depends(get_session)) -> UploadedF
 def feature_page(session: Session, file_id: str, limit: int, offset: int) -> list[Feature]:
     query = select(Feature).where(Feature.file_id == file_id).order_by(Feature.index)
     return list(session.scalars(query.limit(limit).offset(offset)))
+
+
+def accuracy_pair(reference: float, measured: float) -> AccuracyPair:
+    error = abs(measured - reference)
+    error_percent = error / reference * 100 if reference else 0.0
+    return AccuracyPair(reference=reference, measured=measured, error=error, error_percent=error_percent)
 
 
 async def one_file_only(request: Request):
@@ -109,10 +116,17 @@ def file_summary(
     length_unit: LengthUnit = LengthUnit.metre,
 ):
     summary = summarise(session, record.id)
+    references = accuracy(session, record.id, record.crs)
     total_area, _ = convert("area", summary["area"], area_unit.value, length_unit.value)
     total_length, _ = convert("length", summary["length"], area_unit.value, length_unit.value)
+    reference_area, _ = convert("area", references["area"][0], area_unit.value, length_unit.value)
+    reference_length, _ = convert("length", references["length"][0], area_unit.value, length_unit.value)
     return SummaryOut(
         file_id=record.id, feature_count=record.feature_count, measured_count=summary["measured_count"],
         geometry_types=summary["geometry_types"], total_area=total_area, area_unit=area_unit.value,
         total_length=total_length, length_unit=length_unit.value,
+        accuracy=AccuracyOut(
+            area=accuracy_pair(reference_area, total_area),
+            length=accuracy_pair(reference_length, total_length),
+        ),
     )

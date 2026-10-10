@@ -7,7 +7,7 @@ import shapely
 from pyproj import CRS, Transformer
 from shapely.geometry.base import BaseGeometry
 
-from app.edges import geodesic_edges, metres_per_unit, straight_edges
+from app.edges import GEOD, geodesic_edges, metres_per_unit, straight_edges
 
 WGS84 = "EPSG:4326"
 AREA_TYPES = {"Polygon", "MultiPolygon"}
@@ -115,3 +115,29 @@ def transformer(source: str, target: str) -> Transformer:
 def keep_polygons(geometry: BaseGeometry) -> BaseGeometry:
     parts = [g for g in getattr(geometry, "geoms", [geometry]) if g.geom_type in AREA_TYPES]
     return shapely.union_all(parts)
+
+
+def reference_measure(geometry: BaseGeometry, source_crs: str) -> float:
+    lonlat = reproject(shapely.force_2d(geometry), source_crs, WGS84)
+    if lonlat.geom_type in AREA_TYPES:
+        return geodesic_area(lonlat)
+    return geodesic_length(lonlat)
+
+
+def geodesic_area(geometry: BaseGeometry) -> float:
+    total = 0.0
+    for polygon in shapely.get_parts(geometry):
+        total += ring_area(polygon.exterior)
+        for hole in polygon.interiors:
+            total -= ring_area(hole)
+    return total
+
+
+def ring_area(ring) -> float:
+    lons, lats = np.asarray(ring.coords).T[:2]
+    return abs(GEOD.polygon_area_perimeter(lons, lats)[0])
+
+
+def geodesic_length(geometry: BaseGeometry) -> float:
+    lengths = [GEOD.line_length(*np.asarray(line.coords).T[:2]) for line in shapely.get_parts(geometry)]
+    return float(sum(lengths))

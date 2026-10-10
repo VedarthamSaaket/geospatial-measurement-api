@@ -186,6 +186,10 @@ GET /api/files/{id}/summary/
 returns the totals for a file, so the client does not have to page through every measurement to add them up.
 it takes the same area_unit and length_unit params.
 measured_count is the number of features that got a measurement.
+it also has an accuracy block so the numbers can be checked.
+for every measured feature the geometry is measured a second time the geodesic way with pyproj, and those are added up into reference.
+reference is the geodesic value, measured is the total the app gave, error is the difference, and error_percent is error divided by reference times 100.
+the two methods agree to about 0.00003 percent on area and to about 12 digits on length, because the projection used for lines keeps distances very close to the geodesic.
 
 ```
 curl "http://localhost:8000/api/files/01fee8eece33463d9c3b9da6d57ec8d1/summary/?area_unit=hectare&length_unit=kilometre"
@@ -200,7 +204,21 @@ curl "http://localhost:8000/api/files/01fee8eece33463d9c3b9da6d57ec8d1/summary/?
   "total_area": 117.60829673578593,
   "area_unit": "hectare",
   "total_length": 1.5343104335968107,
-  "length_unit": "kilometre"
+  "length_unit": "kilometre",
+  "accuracy": {
+    "area": {
+      "reference": 117.60829716320038,
+      "measured": 117.60829673578593,
+      "error": 4.2741444872262946e-07,
+      "error_percent": 3.634220195617009e-07
+    },
+    "length": {
+      "reference": 1.5343104335976978,
+      "measured": 1.5343104335968107,
+      "error": 8.870681966755001e-13,
+      "error_percent": 5.78154314310094e-11
+    }
+  }
 }
 ```
 
@@ -410,6 +428,8 @@ a file can have thousands of features and returning all of them in one response 
 summary endpoint
 once the measurements are paginated the client cant get a total without fetching every page.
 the totals are worked out by the database with one grouped query, so it does not load the features into python.
+the accuracy block is worked out separately, it reads only the geometry and the stored value of the measured features in one query and measures each one the geodesic way, so the totals query stays cheap.
+i added it because the numbers are the whole point of the service, so it can show how far its own answer is from an independent method instead of asking the reader to trust it.
 
 units are converted when reading, not when storing
 the database always has square metres and metres.

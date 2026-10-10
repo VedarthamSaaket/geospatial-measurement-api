@@ -74,6 +74,18 @@ class MeasurementPage(BaseModel):
     measurements: list[MeasurementOut]
 
 
+class AccuracyPair(BaseModel):
+    reference: float
+    measured: float
+    error: float
+    error_percent: float
+
+
+class AccuracyOut(BaseModel):
+    area: AccuracyPair
+    length: AccuracyPair
+
+
 class SummaryOut(BaseModel):
     file_id: str
     feature_count: int
@@ -83,3 +95,4 @@ class SummaryOut(BaseModel):
     area_unit: str
     total_length: float
     length_unit: str
+    accuracy: AccuracyOut
