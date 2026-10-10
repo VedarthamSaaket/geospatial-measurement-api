@@ -120,6 +120,8 @@ def keep_polygons(geometry: BaseGeometry) -> BaseGeometry:
 def reference_measure(geometry: BaseGeometry, source_crs: str) -> float:
     lonlat = reproject(shapely.force_2d(geometry), source_crs, WGS84)
     if lonlat.geom_type in AREA_TYPES:
+        if not lonlat.is_valid:
+            lonlat = keep_polygons(shapely.make_valid(lonlat))
         return geodesic_area(lonlat)
     return geodesic_length(lonlat)
 

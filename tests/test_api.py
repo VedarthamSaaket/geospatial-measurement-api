@@ -316,3 +316,25 @@ def test_summary_accuracy_for_a_polygon_with_a_hole(client):
     accuracy = client.get(f"/api/files/{file_id}/summary/").json()["accuracy"]
     assert accuracy["area"]["measured"] > 0
     assert accuracy["area"]["error_percent"] < 0.001
+
+
+def test_summary_accuracy_repairs_an_invalid_polygon(client):
+    bowtie = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"name": "bowtie"},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[0, 0], [0.01, 0.01], [0.01, 0], [0, 0.01], [0, 0]]],
+                },
+            }
+        ],
+    }
+    file_id = upload(client, "bowtie.geojson", json.dumps(bowtie).encode()).json()["id"]
+    measurement = client.get(f"/api/files/{file_id}/measurements/").json()["measurements"][0]
+    assert "repaired" in measurement["note"]
+    accuracy = client.get(f"/api/files/{file_id}/summary/").json()["accuracy"]
+    assert accuracy["area"]["reference"] > 0
+    assert accuracy["area"]["error_percent"] < 0.01
